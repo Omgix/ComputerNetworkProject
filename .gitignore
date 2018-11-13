@@ -259,3 +259,6 @@ paket-files/
 # Python Tools for Visual Studio (PTVS)
 __pycache__/
 *.pyc
+/新建文件夹/transbin.cpp
+/新建文件夹/transbin.h
+/新建文件夹
