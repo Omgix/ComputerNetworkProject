@@ -350,7 +350,7 @@ size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
 	int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 	int channels = NUM_CHANNELS;
 	int srate = SAMPLE_RATE;
-	if (!path) path = "reveivewave.wav";
+	if (!path) path = "reveivewaves.wav";
 	SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
 	file.writeSync();
 	return file.write(samples, frameIndex - startFrom);
@@ -460,9 +460,9 @@ bool ReceiveData::demodulate()
 					}
 				}
 				memcpy(wptr, packet[choice], bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC);
-				if (!signal)
+				if (need_ack)
 					*signal = true;
-				if (bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)
+				if (mode == RECEIVER && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)
 					return true;
 				else
 					prepare_for_new_packet();

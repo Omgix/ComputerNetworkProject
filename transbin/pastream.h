@@ -124,8 +124,8 @@ class Stream
 private:
 	PaError						err;
 	unsigned long				bufferSize;
-	const PaStreamParameters	inputParameters;
-	const PaStreamParameters	outputParameters;
+	PaStreamParameters	inputParameters;
+	PaStreamParameters	outputParameters;
 	PaStream*					input_stream;
 	PaStream*					output_stream;
 	static int					numStream;

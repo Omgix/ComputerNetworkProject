@@ -160,7 +160,7 @@ bool Stream::select_input_device(int device_no)
 	}
 	if (device_no >= 0 && device_no < numDevices)
 	{
-		set_input_para(device_no);
+		inputParameters = set_input_para(device_no);
 		return true;
 	}
 	return false;
@@ -177,7 +177,7 @@ bool Stream::select_output_device(int device_no)
 	}
 	if (device_no >= 0 && device_no < numDevices)
 	{
-		set_output_para(device_no);
+		inputParameters = set_output_para(device_no);
 		return true;
 	}
 	return false;
