@@ -71,10 +71,11 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 		{
 			if (data->isNewPacket)
 			{
-				*wptr++ = SAMPLE_SILENCE;
 				if (data->wait)
 				{
 					*wptr++ = SAMPLE_SILENCE;
+					data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
+					data->totalFrames++;
 					if (data->mode == TRANSMITTER)
 					{
 						if (clock::now() > data->time_send + ACK_TIME_OUT) // Time out! Retransmit
