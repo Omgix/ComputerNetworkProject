@@ -22,6 +22,7 @@
     <ClCompile Include="crc.c" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="pastream.cpp" />
+    <ClCompile Include="transmit.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="crc.h" />
