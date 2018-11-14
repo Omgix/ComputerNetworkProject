@@ -1,59 +1,59 @@
 ﻿#include "pastream.h"
 #include <cstdio>
 
+
 int Stream::error() {
 	Pa_Terminate();
 	printf("An error occurred while using the portaudio stream\n");
 	printf("Error number: %d\n", err);
 	printf("Error message: %s\n", Pa_GetErrorText(err));
 	printf("Press any key to exit...\n");
-	getchar();
+	char c;
+	scanf("%c", &c);
 	exit(err);
 }
 
-PaStreamParameters Stream::set_input_para(int receiveDeviceNo)
+void Stream::set_input_para(int receiveDeviceNo)
 {
-	PaStreamParameters inputParameters;
-	inputParameters.device = receiveDeviceNo;
 	if (receiveDeviceNo >= 0)
 	{
+		inputParameters.device = receiveDeviceNo;
 		inputParameters.channelCount = NUM_CHANNELS;
 		inputParameters.sampleFormat = PA_SAMPLE_TYPE;
 		inputParameters.suggestedLatency = Pa_GetDeviceInfo(inputParameters.device)->defaultLowInputLatency;
 		inputParameters.hostApiSpecificStreamInfo = nullptr;
 	}
-	return inputParameters;
 }
 
-PaStreamParameters Stream::set_output_para(int sendDeviceNo)
+void Stream::set_output_para(int sendDeviceNo)
 {
-	PaStreamParameters outputParameters;
-	outputParameters.device = sendDeviceNo;
 	if (sendDeviceNo >= 0)
 	{
+		outputParameters.device = sendDeviceNo;
 		outputParameters.channelCount = NUM_CHANNELS;
 		outputParameters.sampleFormat = PA_SAMPLE_TYPE;
 		outputParameters.suggestedLatency = Pa_GetDeviceInfo(outputParameters.device)->defaultLowInputLatency;
 		outputParameters.hostApiSpecificStreamInfo = nullptr;
 	}
-	return outputParameters;
 }
 
 Stream::Stream(int sendDeviceNo, int receiveDeviceNo) :
 			err(!numStream ? Pa_Initialize() : paNoError),
 			bufferSize(FRAMES_PER_BUFFER),
-			inputParameters(set_input_para(receiveDeviceNo)),
-			outputParameters(set_output_para(sendDeviceNo)),
 			input_stream(nullptr), output_stream(nullptr)
 {
 	if (err != paNoError) error();
 	numStream++;
+	set_input_para(receiveDeviceNo);
+	set_output_para(sendDeviceNo);
 }
 
 Stream::~Stream()
 {
-	close_input_stream();
-	close_output_stream();
+	if (input_stream)
+		close_input_stream();
+	if (output_stream)
+		close_output_stream();
 	numStream--;
 	if (!numStream)
 		Pa_Terminate();
@@ -69,7 +69,7 @@ void Stream::open_input_stream(ReceiveData *data, PaStreamCallback callback)
 			FRAMES_PER_BUFFER,
 			paClipOff,
 			callback,
-			&data);
+			data);
 	if (err != paNoError) error();
 }
 
@@ -160,7 +160,7 @@ bool Stream::select_input_device(int device_no)
 	}
 	if (device_no >= 0 && device_no < numDevices)
 	{
-		inputParameters = set_input_para(device_no);
+		set_input_para(device_no);
 		return true;
 	}
 	return false;
@@ -177,7 +177,7 @@ bool Stream::select_output_device(int device_no)
 	}
 	if (device_no >= 0 && device_no < numDevices)
 	{
-		inputParameters = set_output_para(device_no);
+		set_output_para(device_no);
 		return true;
 	}
 	return false;
@@ -208,18 +208,29 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
 	}
 }
 
-void Stream::send(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent, 
+void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sent, 
 				bool write_rec_waves, const char* file_wave_rec)
 {
 	open_input_stream(&data.receive_data, receiveCallback);
-	open_output_stream(&data.send_data, receiveCallback);
+	open_output_stream(&data.send_data, sendCallback);
 	start_input_stream();
 	start_output_stream();
 
 	printf("Waiting for sending to finish.\n");
 
+	timepoint tpPrint = std::chrono::system_clock::now();
+	milliseconds intervalPrint(100);
+	unsigned total = (data.send_data.size * BITS_PER_BYTE) +
+		ceil((float)data.send_data.size * BITS_PER_BYTE / BITS_CONTENT) * BITS_PER_BYTE * BYTES_CRC;
 	while ((err = Pa_IsStreamActive(output_stream)) == 1)
+	{
 		data.receive_data.demodulate();
+		if (std::chrono::system_clock::now() - tpPrint >= intervalPrint)
+		{
+			tpPrint = std::chrono::system_clock::now();
+			printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
+		}
+	}
 	if (err < 0) error();
 	if (data.send_data.wait)
 		printf("LINK ERROR!!\n");
@@ -246,7 +257,7 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
 
 	printf("\n===================== Now receiving!! Please wait. =====================\n"); fflush(stdout);
 
-	Pa_Sleep(2000);
+	Pa_Sleep(20);
 	while ((err = Pa_IsStreamActive(input_stream)) == 1)
 	{
 		bool finished = data.demodulate();
@@ -263,10 +274,10 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
 	}
 }
 
-void Stream::receive(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent,
+void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_sent,
 	bool write_rec_waves, const char* file_wave_rec)
 {
-	open_output_stream(&data.send_data, receiveCallback);
+	open_output_stream(&data.send_data, sendCallback);
 	open_input_stream(&data.receive_data, receiveCallback);
 	start_output_stream();
 	start_input_stream();
