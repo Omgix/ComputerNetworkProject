@@ -97,7 +97,24 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 	/* Stage of signal before sending data. */
 	if (data->status == SendData::status::SIGNAL)
 	{
-		for (unsigned i = 0; i < framesPerBuffer; ++i)
+		unsigned frames = framesPerBuffer;
+		if (data->mode == RECEIVER && data->wait)
+		{
+			unsigned i;
+			for (i = 0; i < framesPerBuffer; ++i)
+			{
+				*wptr++ = SAMPLE_SILENCE;
+				data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
+				if (*data->signal)
+				{
+					data->wait = false;
+					break;
+				}
+			}
+			if (i == framesPerBuffer) return paContinue;
+			else frames = framesPerBuffer - i - 1;
+		}
+		for (unsigned i = 0; i < frames; ++i)
 		{
 			if (index < LEN_PREAMBLE)
 			{
@@ -115,37 +132,24 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 		if (index >= LEN_SIGNAL)
 		{
 			data->status = SendData::status::CONTENT;
-			data->prepare_for_new_sending();
+			data->isNewPacket = true;
 		}
 		return paContinue;
 	}
 	else
 	{
-		unsigned long leftFrames;
-		unsigned long framesCalc;
-		int finished;
-
-		leftFrames = data->totalFrames - fileFrameIndex;
-		finished = paContinue;
-		if (leftFrames <= framesPerBuffer && !data->need_ack && data->mode == TRANSMITTER)
-		{
-			framesCalc = leftFrames;
-			finished = paComplete;
-		}
-		else
-			framesCalc = framesPerBuffer;
-
 		if (wptr == nullptr)
 			return paComplete;
 
 		/* Use 2-PSK to modulate */
-		for (unsigned i = 0; i < framesCalc; ++i)
+		for (unsigned i = 0; i < framesPerBuffer; ++i)
 		{
 			if (data->isNewPacket)
 			{
 				if (data->wait)
 				{
 					*wptr++ = SAMPLE_SILENCE;
+					data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
 					if (data->mode == TRANSMITTER)
 					{
 						if (std::chrono::system_clock::now() > data->time_send + data->ack_timeout) // Time out! Retransmit
@@ -156,13 +160,16 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 							data->wait = false;
 							if (data->ack_timeout == ACK_INIT_TIMEOUT)
 								data->ack_timeout -= DURATION_SIGNAL;
+							data->bitIndex -= index / SAMPLES_PER_BIT;
 						}
 						else if (*data->signal) // ACK received
 						{
 							data->times_sent = 0;
 							data->wait = false;
-							if (fileFrameIndex == data->totalFrames - 1) // All data has been sent
+							if (data->bitIndex >= data->totalBits) // All data has been sent
 								return paComplete; // When reach there, wait is false;
+							if (data->ack_timeout == ACK_INIT_TIMEOUT)
+								data->ack_timeout -= DURATION_SIGNAL;
 						}
 					}
 					else if (data->mode == RECEIVER)
@@ -174,6 +181,7 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 				}
 				data->isNewPacket = false;
 				data->isPreamble = true;
+				index = 0;
 			}
 			if (data->isPreamble)
 			{
@@ -199,7 +207,9 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 				*wptr++ = frame;
 				if (index % SAMPLES_PER_BIT == 0)
 					data->bitIndex++;
-				if (index >= SAMPLES_PER_BIT * BITS_NORMALPACKET || fileFrameIndex == data->totalFrames - 1)
+				if ((data->mode == TRANSMITTER && (index>= SAMPLES_PER_BIT * BITS_NORMALPACKET || 
+					data->bitIndex >= data->totalBits)) ||
+					(data->mode == RECEIVER && index >= SAMPLES_PER_BIT * (BYTES_ACK_CONTENT + BYTES_CRC) * BITS_PER_BYTE))
 				{
 					data->prepare_for_new_sending(); // Reset several index after sending a packet
 					if (data->need_ack || data->mode == RECEIVER)
@@ -208,20 +218,22 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 						data->wait = true;
 						*data->signal = false;
 					}
+					if (data->mode == TRANSMITTER && data->bitIndex >= data->totalBits && !data->need_ack)
+						return paComplete;
 				}
 
 			}
 		}
 
-		return finished;
+		return paContinue;
 	}
 }
 
-SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, milliseconds timeout_ , bool need_ack_, Mode mode_, bool *ack_received_) :
+SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, milliseconds timeout_, bool need_ack_, Mode mode_, bool *ack_received_) :
 	status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
 	bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(mode_ == RECEIVER ? true : need_ack_),
-	wait(false), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_), ack_timeout(timeout_),
-	times_sent(0)
+	wait(mode_ == TRANSMITTER? false:true), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_), 
+	ack_timeout(timeout_), times_sent(0)
 {
 	if (mode == TRANSMITTER)
 	{
@@ -256,6 +268,7 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 		fclose(file);
 		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
 			+ (LEN_PREAMBLE + BITS_CRC * SAMPLES_PER_BIT) * numPacket;
+		totalBits = size * BITS_PER_BYTE + BITS_CRC * numPacket;
 	}
 	else if (mode_ == RECEIVER)
 	{
@@ -268,6 +281,7 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 		memcpy(data + size, &crc, BYTES_CRC);
 		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
 			+ (LEN_PREAMBLE + BITS_CRC * SAMPLES_PER_BIT);
+		totalBits = size * BITS_PER_BYTE + BITS_CRC;
 	}
 	if (!ext_sample_ptr)
 		samples = new SAMPLE[totalFrames];
@@ -283,10 +297,9 @@ SendData::~SendData()
 
 void SendData::prepare_for_new_sending()
 {
-	packetFrameIndex = 0;
 	isNewPacket = true;
 	if (mode == RECEIVER)
-		fileFrameIndex -= totalFrames - LEN_SIGNAL;
+		bitIndex -= packetFrameIndex / SAMPLES_PER_BIT;
 }
 
 sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
@@ -298,7 +311,7 @@ sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
 	SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
 	file.writeSync();
 
-	return file.write(samples, totalFrames);
+	return file.write(samples, fileFrameIndex);
 }
 
 int receiveCallback(const void *inputBuffer, void *outputBuffer,
@@ -366,11 +379,7 @@ ReceiveData::~ReceiveData()
 
 void ReceiveData::prepare_for_new_packet()
 {
-	if (!need_ack)
-		frameIndex += LEN_PREAMBLE - 20;
-	else if (need_ack)
-		frameIndex += LEN_PREAMBLE + LEN_PREAMBLE + 
-		(BYTES_ACK_CONTENT * BITS_PER_BYTE + BITS_CRC) * SAMPLES_PER_BIT;
+	frameIndex += LEN_PREAMBLE - 20;
 	packetFrameIndex = 0;
 	status = DETECTING;
 	in = false;
@@ -456,7 +465,7 @@ bool ReceiveData::demodulate()
 				startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
 				first = false;
 			}
-			printf("New packet start from frame #%u\r", frameIndex); fflush(stdout);
+			printf("New packet start from frame #%u\n", frameIndex); fflush(stdout);
 			in = true;
 		}
 		if (status == WAITING || status == ASSURING)
@@ -520,12 +529,13 @@ bool ReceiveData::demodulate()
 			frameIndex++;
 			if ((mode == RECEIVER && (packetFrameIndex >= SAMPLES_PER_BIT * BITS_NORMALPACKET ||
 				bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)) ||
-				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_BIT * BITS_PER_BYTE * BYTES_ACK_CONTENT))
+				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_BIT * BITS_PER_BYTE * (BYTES_ACK_CONTENT + BYTES_CRC)))
 			{
 				unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_BIT;
 				unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
 				uint8_t *wptr = data + indexByte;
 				int choice = 0;
+				bool canAc = false;
 				for (int i = 0; i < 5; ++i)
 				{
 					crc_t crc = crc_init();
@@ -533,12 +543,20 @@ bool ReceiveData::demodulate()
 					crc = crc_finalize(crc);
 					if (crc == 0x48674bc7) {
 						choice = i;
+						canAc = true;
 						break;
 					}
 				}
-				memcpy(wptr, packet[choice], bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC);
-				if (need_ack)
+				if (canAc)
+					memcpy(wptr, packet[choice], bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC);
+				else if (mode == RECEIVER)
+					bitsReceived -= bitsReceivedPacket;
+				if ((need_ack && mode == RECEIVER && canAc) || mode == TRANSMITTER) 
+				{
+					if (mode == TRANSMITTER)
+						printf("SIGNAL\n");
 					*signal = true;
+				}
 				if (mode == RECEIVER && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)
 					return true;
 				else
@@ -549,9 +567,9 @@ bool ReceiveData::demodulate()
 	return false;
 }
 
-DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_, 
-	void *data_rec_,SAMPLE *samples_sent_, SAMPLE *samples_rec_) :
-	signal(false), mode(mode_), 
+DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_,
+	void *data_rec_, SAMPLE *samples_sent_, SAMPLE *samples_rec_) :
+	signal(false), mode(mode_),
 	send_data(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal),
 	receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
 {

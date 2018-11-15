@@ -10,6 +10,7 @@ const char Wellcome[] =
 "                                                                   \n"
 "===================================================================\n"
 "Please enter a number to choose an option : \n";
+
 const char Options[] =
 "    1. Send a file.\n"
 "    2. Receive a file.\n"
@@ -60,13 +61,13 @@ int main()
 		{
 			select_audiodev(fifoStream, true, true, true);
 			DataCo data(TRANSMITTER, "INPUT.bin", data_sent, data_rec, samples_sent, samples_rec);
-			fifoStream.send(data, true, nullptr, false, nullptr);
+			fifoStream.send(data, true, "wavesent1.wav", true, "wavereceived1.wav");
 		}
 		else if (option == 4)
 		{
 			select_audiodev(fifoStream, true, true, true);
 			DataCo data(RECEIVER, nullptr, data_sent, data_rec, samples_sent, samples_rec);
-			fifoStream.receive(data, false, nullptr, true, nullptr);
+			fifoStream.receive(data, true, "wavesent2.wav", true, "wavereceived2.wav");
 		}
 		else if (option == 5)
 		{

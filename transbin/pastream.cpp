@@ -217,19 +217,12 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
 	start_output_stream();
 
 	printf("Waiting for sending to finish.\n");
-
-	timepoint tpPrint = std::chrono::system_clock::now();
-	milliseconds intervalPrint(100);
 	unsigned total = (data.send_data.size * BITS_PER_BYTE) +
 		ceil((float)data.send_data.size * BITS_PER_BYTE / BITS_CONTENT) * BITS_PER_BYTE * BYTES_CRC;
 	while ((err = Pa_IsStreamActive(output_stream)) == 1)
 	{
 		data.receive_data.demodulate();
-		if (std::chrono::system_clock::now() - tpPrint >= intervalPrint)
-		{
-			tpPrint = std::chrono::system_clock::now();
-			printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
-		}
+		printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
 	}
 	if (err < 0) error();
 	if (data.send_data.wait)

@@ -22,7 +22,7 @@ typedef std::chrono::milliseconds milliseconds;
 const int SAMPLE_RATE = 44100;          // SAMPLE_RATE frames in a second
 const int NUM_CHANNELS = 1;             // Mono channel will be used
 const int FRAMES_PER_BUFFER = 512;      // Size of the buffer
-const int BITS_CONTENT = 1200;        // Number of content bits in a packet
+const int BITS_CONTENT = 1000;        // Number of content bits in a packet
 const int BYTES_CONTENT = BITS_CONTENT / 8;
 const int BYTES_ACK_CONTENT = 5;
 const int BITS_CRC = 32;
@@ -38,12 +38,12 @@ const float CONSTANT_THRESHOLD = 0.85;  // Test
 const float THRESHOLD_DEMODULATE = 0.f; // 2-PSK threshold to determine what we received is 1 or 0
 const float THRESHOLD_ASSURING = 50.f;  // Convolution threshold of starting adjusting preamble threshold
 const float A = 0.95f;                  // Amplitude of the sound
-const float CONSTANT_AMPLIFY = 4;       // The constant that will be multiplied in the frames that Rx received.
+const float CONSTANT_AMPLIFY = 1;       // The constant that will be multiplied in the frames that Rx received.
 const int MAX_TIME_RECORD = 30;         // Max recording time in seconds
-const int INITIAL_INDEX_RX = 10100;
+const int INITIAL_INDEX_RX = 4000;
 const int BITS_PER_BYTE = 8;
 const int TIMES_TRY = 10;
-const milliseconds ACK_INIT_TIMEOUT(600);
+const milliseconds ACK_INIT_TIMEOUT(320);
 const milliseconds DURATION_SIGNAL(23);
 
 
@@ -78,7 +78,7 @@ public:
 	bool select_input_device(int device_no);
 	bool select_output_device(int device_no);
 	void send(SendData &data, bool writewaves = false, const char* file_name = nullptr);
-	void send(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr, 
+	void send(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void receive(ReceiveData &data, bool writewaves = false, const char* file_name = nullptr);
 	void receive(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
@@ -86,10 +86,10 @@ public:
 };
 
 int sendCallback(const void *inputBuffer, void *outputBuffer,
-				unsigned long framesPerBuffer,
-				const PaStreamCallbackTimeInfo *timeInfo,
-				PaStreamCallbackFlags statusFlags,
-				void* userData);
+	unsigned long framesPerBuffer,
+	const PaStreamCallbackTimeInfo *timeInfo,
+	PaStreamCallbackFlags statusFlags,
+	void* userData);
 
 enum Mode
 {
@@ -120,6 +120,7 @@ private:
 	unsigned long fileFrameIndex;                 // Index of the sound frame that will send
 	unsigned long totalFrames;					  // Total number of sound frames.
 	unsigned bitIndex;                            // Index of the bit that will send
+	unsigned totalBits;
 	unsigned size;                                // Total number of bytes that will send.
 	unsigned packetFrameIndex;                    // Index of the sound frame in a packet
 	bool isPreamble;                              // Indicate if we will send a preamble frame
@@ -187,7 +188,7 @@ private:
 		void* userData);
 	friend class Stream;
 public:
-	ReceiveData(unsigned max_time, void *data_ = nullptr, SAMPLE *samples_ = nullptr, 
+	ReceiveData(unsigned max_time, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
 		bool need_ack_ = false, Mode mode_ = RECEIVER, bool *ack_received_ = nullptr);
 	~ReceiveData();
 	ReceiveData(const ReceiveData &rhs) = delete;
@@ -205,7 +206,7 @@ private:
 	ReceiveData receive_data;
 	friend class Stream;
 public:
-	DataCo(Mode mode_, const char *send_file = nullptr, void *data_sent_ = nullptr, 
+	DataCo(Mode mode_, const char *send_file = nullptr, void *data_sent_ = nullptr,
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
