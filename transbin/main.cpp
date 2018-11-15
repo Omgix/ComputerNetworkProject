@@ -34,6 +34,8 @@ SAMPLE samples_rec[MAX_TIME_RECORD * SAMPLE_RATE];
 
 static void select_audiodev(Stream &stream, bool list, bool input, bool output);
 
+int NODE = 0;
+
 int main()
 {
 	SetConsoleOutputCP(65001);

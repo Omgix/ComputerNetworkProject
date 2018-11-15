@@ -189,8 +189,7 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
 	start_output_stream();
 
 	printf("Waiting for sending to finish.\n");
-	unsigned total = (data.size * BITS_PER_BYTE) +
-		ceil((float)data.size * BITS_PER_BYTE / BITS_CONTENT) * BITS_PER_BYTE * BYTES_CRC;
+	unsigned total = data.totalBits;
 	while ((err = Pa_IsStreamActive(output_stream)) == 1) 
 	{
 		printf("% 3.2f%% Completed\r", (float)data.bitIndex * 100 / total); fflush(stdout);
@@ -211,14 +210,12 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
 void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sent, 
 				bool write_rec_waves, const char* file_wave_rec)
 {
+	printf("Waiting for sending to finish.\n");
+	unsigned total = data.send_data.totalBits;
 	open_input_stream(&data.receive_data, receiveCallback);
 	open_output_stream(&data.send_data, sendCallback);
 	start_input_stream();
 	start_output_stream();
-
-	printf("Waiting for sending to finish.\n");
-	unsigned total = (data.send_data.size * BITS_PER_BYTE) +
-		ceil((float)data.send_data.size * BITS_PER_BYTE / BITS_CONTENT) * BITS_PER_BYTE * BYTES_CRC;
 	while ((err = Pa_IsStreamActive(output_stream)) == 1)
 	{
 		data.receive_data.demodulate();
@@ -226,7 +223,7 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
 	}
 	if (err < 0) error();
 	if (data.send_data.wait)
-		printf("LINK ERROR!!\n");
+		printf("\nLINK ERROR!!\n");
 	else
 		printf("###################### Sending has been done. #######################\n");
 	if (write_sent_waves)

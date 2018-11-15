@@ -3,15 +3,17 @@
 #include <cstdlib>
 #include <cmath>
 #include "crc.h"
+//#include <armadillo>
+
+//using namespace arma;
 
 float THRESHOLD_SILENCE;
 bool in = false;
 bool first = true;
-//uint8_t tmp_p[BYTES_CONTENT + BYTES_CRC];
 
 float sine[SAMPLE_RATE / FREQUENCY_CARRIER] =
 { +0.00000000f, +0.78183148f, +0.97492791f, +0.43388374f, -0.43388374f, -0.97492791f, -0.78183148f, };
-float preamble[LEN_PREAMBLE] =
+const float preamble[LEN_PREAMBLE] =
 {
 +0.00000000f, +0.00278273f, +0.01113070f, +0.02504197f, +0.04450900f, +0.06951219f, +0.10001086f, +0.13593172f,
 +0.17715485f, +0.22349749f, +0.27469565f, +0.33038412f, +0.39007528f, +0.45313737f, +0.51877326f, +0.58600081f,
@@ -78,6 +80,8 @@ float preamble[LEN_PREAMBLE] =
 +0.87607589f, +0.06530093f, +0.59253707f, +0.35960676f, +0.19920101f, -0.71839247f, -0.23073758f, +0.94417820f,
 -0.61817443f, -0.99521580f, -0.89118950f, +0.86223239f, -0.99930320f, -0.56952985f, -0.92246700f, +0.17139631f,
 };
+
+//fvec Preamble(preamble, LEN_PREAMBLE);
 
 int sendCallback(const void *inputBuffer, void *outputBuffer,
 	unsigned long framesPerBuffer,
@@ -209,7 +213,7 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 					data->bitIndex++;
 				if ((data->mode == TRANSMITTER && (index>= SAMPLES_PER_BIT * BITS_NORMALPACKET || 
 					data->bitIndex >= data->totalBits)) ||
-					(data->mode == RECEIVER && index >= SAMPLES_PER_BIT * (BYTES_ACK_CONTENT + BYTES_CRC) * BITS_PER_BYTE))
+					(data->mode == RECEIVER && index >= SAMPLES_PER_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC)))
 				{
 					data->prepare_for_new_sending(); // Reset several index after sending a packet
 					if (data->need_ack || data->mode == RECEIVER)
@@ -250,38 +254,44 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 		rewind(file);
 		size_t numPacket = ceil((float)size / BYTES_CONTENT);
 		if (!ext_data_ptr)
-			data = new uint8_t[size + numPacket * BYTES_CRC];
+			data = new uint8_t[size + numPacket * (BYTES_CRC + BYTES_INFO)];
 		uint8_t *ptr = data;
 		unsigned remain = size;
+
+		uint8_t info[BYTES_INFO] = {};
+
 		for (int i = 0; i < numPacket; ++i)
 		{
 			unsigned numRead = remain < BYTES_CONTENT ? remain : BYTES_CONTENT;
-			int n = fread(ptr, sizeof(char), numRead, file);
+			memcpy(ptr, info, BYTES_INFO);
+			ptr += BYTES_INFO;
+			fread(ptr, 1, numRead, file);
+			ptr -= BYTES_INFO;
 			remain -= numRead;
 			crc_t crc = crc_init();
-			crc = crc_update(crc, ptr, numRead);
+			crc = crc_update(crc, ptr, numRead + BYTES_INFO);
 			crc = crc_finalize(crc);
-			ptr += numRead;
+			ptr += numRead + BYTES_INFO;
 			memcpy(ptr, &crc, BYTES_CRC);
 			ptr += BYTES_CRC;
 		}
 		fclose(file);
 		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
-			+ (LEN_PREAMBLE + BITS_CRC * SAMPLES_PER_BIT) * numPacket;
-		totalBits = size * BITS_PER_BYTE + BITS_CRC * numPacket;
+			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_BIT) * numPacket;
+		totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
 	}
 	else if (mode_ == RECEIVER)
 	{
 		size = BYTES_ACK_CONTENT;
 		if (!ext_data_ptr)
-			data = new uint8_t[size + BYTES_CRC];
+			data = new uint8_t[size + BYTES_CRC + BYTES_INFO];
 		crc_t crc = crc_init();
-		crc = crc_update(crc, data, size);
+		crc = crc_update(crc, data, BYTES_ACK_CONTENT + BYTES_INFO);
 		crc = crc_finalize(crc);
-		memcpy(data + size, &crc, BYTES_CRC);
+		memcpy(data + BYTES_ACK_CONTENT + BYTES_INFO, &crc, BYTES_CRC);
 		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
-			+ (LEN_PREAMBLE + BITS_CRC * SAMPLES_PER_BIT);
-		totalBits = size * BITS_PER_BYTE + BITS_CRC;
+			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_BIT);
+		totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO);
 	}
 	if (!ext_sample_ptr)
 		samples = new SAMPLE[totalFrames];
@@ -365,7 +375,7 @@ ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_,
 	need_ack(mode_ == TRANSMITTER ? true : need_ack_)
 {
 	for (int i = 0; i < 5; ++i)
-		packet[i] = new uint8_t[BYTES_CONTENT + BYTES_CRC];
+		packet[i] = new uint8_t[BYTES_CONTENT + BYTES_CRC + BYTES_INFO];
 }
 
 ReceiveData::~ReceiveData()
@@ -384,7 +394,7 @@ void ReceiveData::prepare_for_new_packet()
 	status = DETECTING;
 	in = false;
 	for (int i = 0; i < 5; ++i)
-		memset(packet[i], 0, BYTES_CONTENT + BYTES_CRC);
+		memset(packet[i], 0, BYTES_CONTENT + BYTES_CRC + BYTES_INFO);
 }
 
 void ReceiveData::prepare_for_receiving()
@@ -392,7 +402,7 @@ void ReceiveData::prepare_for_receiving()
 	status = DETECTING;
 	packetFrameIndex = 0;
 	for (int i = 0; i < 5; ++i)
-		memset(packet[i], 0, BYTES_CONTENT + BYTES_CRC);
+		memset(packet[i], 0, BYTES_CONTENT + BYTES_CRC + BYTES_INFO);
 }
 
 void ReceiveData::correct_threshold()
@@ -401,6 +411,8 @@ void ReceiveData::correct_threshold()
 
 	for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
 		cur += samples[frameIndex - LEN_PREAMBLE + i] * preamble[i];
+	//fvec samp(samples + frameIndex - LEN_PREAMBLE, LEN_PREAMBLE, false, true);
+	//float result = dot(samp, Preamble);
 	if (abs(cur) > threshold)
 		threshold = abs(cur);
 }
@@ -411,6 +423,8 @@ bool ReceiveData::correlate_next()
 
 	for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
 		cur += samples[frameIndex - LEN_PREAMBLE + 1 + i] * preamble[i];
+	//fvec samp(samples + frameIndex - LEN_PREAMBLE + 1, LEN_PREAMBLE, false, true);
+	//float result = dot(samp, Preamble);
 	return abs(cur) >= threshold ? true : false;
 }
 
@@ -425,7 +439,7 @@ size_t ReceiveData::write_to_file(const char* path = nullptr)
 		fputs("Invalid file!\n", stderr);
 		exit(-1);
 	}
-	unsigned num_bytes = (bitsReceived - ceil((float)bitsReceived / BITS_NORMALPACKET) * BITS_CRC) / BITS_PER_BYTE;
+	unsigned num_bytes = (bitsReceived - ceil((float)bitsReceived / BITS_NORMALPACKET) * (BITS_CRC + BITS_INFO)) / BITS_PER_BYTE;
 	n = fwrite(data, sizeof(uint8_t), num_bytes, file);
 	fclose(file);
 	return n;
@@ -465,7 +479,7 @@ bool ReceiveData::demodulate()
 				startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
 				first = false;
 			}
-			printf("New packet start from frame #%u\n", frameIndex); fflush(stdout);
+			//printf("New packet start from frame #%u\r", frameIndex); fflush(stdout);
 			in = true;
 		}
 		if (status == WAITING || status == ASSURING)
@@ -528,8 +542,8 @@ bool ReceiveData::demodulate()
 			}
 			frameIndex++;
 			if ((mode == RECEIVER && (packetFrameIndex >= SAMPLES_PER_BIT * BITS_NORMALPACKET ||
-				bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)) ||
-				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_BIT * BITS_PER_BYTE * (BYTES_ACK_CONTENT + BYTES_CRC)))
+				bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))) ||
+				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO)))
 			{
 				unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_BIT;
 				unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
@@ -547,17 +561,15 @@ bool ReceiveData::demodulate()
 						break;
 					}
 				}
-				if (canAc)
-					memcpy(wptr, packet[choice], bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC);
+				if (canAc || (mode == RECEIVER && !need_ack))
+					memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC - BYTES_INFO);
 				else if (mode == RECEIVER)
 					bitsReceived -= bitsReceivedPacket;
 				if ((need_ack && mode == RECEIVER && canAc) || mode == TRANSMITTER) 
 				{
-					if (mode == TRANSMITTER)
-						printf("SIGNAL\n");
 					*signal = true;
 				}
-				if (mode == RECEIVER && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * BITS_CRC)
+				if (mode == RECEIVER && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))
 					return true;
 				else
 					prepare_for_new_packet();
@@ -572,5 +584,13 @@ DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_,
 	signal(false), mode(mode_),
 	send_data(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal),
 	receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
+{
+}
+
+DataSim::DataSim(const char *send_file, void *data_sent_, void *data_rec_,
+	SAMPLE *samples_sent_, SAMPLE *samples_rec_) : backoff(),
+	senddata(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, TRANSMITTER, nullptr),
+	ack(nullptr, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, RECEIVER, nullptr),
+	receivedata(MAX_TIME_RECORD, data_rec_, samples_rec_, true, RECEIVER, nullptr)
 {
 }

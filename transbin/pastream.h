@@ -22,25 +22,28 @@ typedef std::chrono::milliseconds milliseconds;
 const int SAMPLE_RATE = 44100;          // SAMPLE_RATE frames in a second
 const int NUM_CHANNELS = 1;             // Mono channel will be used
 const int FRAMES_PER_BUFFER = 512;      // Size of the buffer
-const int BITS_CONTENT = 1000;        // Number of content bits in a packet
+const int BITS_INFO = 16;
+const int BYTES_INFO = BITS_INFO / 8;
+const int BITS_CONTENT = 1600;        // Number of content bits in a packet
 const int BYTES_CONTENT = BITS_CONTENT / 8;
 const int BYTES_ACK_CONTENT = 5;
+const int BITS_ACK_CONTENT = BYTES_ACK_CONTENT * 8;
 const int BITS_CRC = 32;
 const int BYTES_CRC = BITS_CRC / 8;
-const int BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT;
-const int SIZE_NORMALPACKET = BITS_NORMALPACKET / 8;
+const int BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT + BITS_INFO;
+const int BYTES_NORMALPACKET = BITS_NORMALPACKET / 8;
 const int LEN_PREAMBLE = 512;		// Length of the preamble in frames
 const int OPERATING_BANDWIDTH = 1000;   // Equal to bandwidth in bps
 const int FREQUENCY_CARRIER = 6300;     // Frequency of carrier waive
 const int SAMPLES_PER_BIT = 4;         // 
 const int LEN_SIGNAL = 1024;         // Length of the silence interval in frames
-const float CONSTANT_THRESHOLD = 0.85;  // Test
+const float CONSTANT_THRESHOLD = 0.80;  // Test
 const float THRESHOLD_DEMODULATE = 0.f; // 2-PSK threshold to determine what we received is 1 or 0
 const float THRESHOLD_ASSURING = 50.f;  // Convolution threshold of starting adjusting preamble threshold
 const float A = 0.95f;                  // Amplitude of the sound
 const float CONSTANT_AMPLIFY = 1;       // The constant that will be multiplied in the frames that Rx received.
 const int MAX_TIME_RECORD = 30;         // Max recording time in seconds
-const int INITIAL_INDEX_RX = 4000;
+const int INITIAL_INDEX_RX = 600;
 const int BITS_PER_BYTE = 8;
 const int TIMES_TRY = 10;
 const milliseconds ACK_INIT_TIMEOUT(320);
@@ -210,6 +213,21 @@ public:
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
+};
+
+class DataSim
+{
+private:
+	timepoint backoff;
+	SendData senddata;
+	SendData ack;
+	ReceiveData receivedata;
+	friend class Stream;
+public:
+	DataSim(const char *send_file = nullptr, void *data_sent_ = nullptr,
+		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
+	DataSim(const DataSim &rhs) = delete;
+	DataSim &operator=(const DataSim &rhs) = delete;
 };
 
 #endif
