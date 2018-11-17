@@ -1,7 +1,6 @@
 ﻿#include "pastream.h"
 #include <cstdio>
 
-
 int Stream::error() {
 	Pa_Terminate();
 	printf("An error occurred while using the portaudio stream\n");
@@ -50,10 +49,6 @@ Stream::Stream(int sendDeviceNo, int receiveDeviceNo) :
 
 Stream::~Stream()
 {
-	if (input_stream)
-		close_input_stream();
-	if (output_stream)
-		close_output_stream();
 	numStream--;
 	if (!numStream)
 		Pa_Terminate();
@@ -73,7 +68,35 @@ void Stream::open_input_stream(ReceiveData *data, PaStreamCallback callback)
 	if (err != paNoError) error();
 }
 
+void Stream::open_input_stream(DataSim *data, PaStreamCallback callback)
+{
+	err = Pa_OpenStream(
+		&input_stream,
+		&inputParameters,
+		nullptr,
+		SAMPLE_RATE,
+		FRAMES_PER_BUFFER,
+		paClipOff,
+		callback,
+		data);
+	if (err != paNoError) error();
+}
+
 void Stream::open_output_stream(SendData *data, PaStreamCallback callback)
+{
+	err = Pa_OpenStream(
+		&output_stream,
+		nullptr,
+		&outputParameters,
+		SAMPLE_RATE,
+		FRAMES_PER_BUFFER,
+		paClipOff,
+		callback,
+		data);
+	if (err != paNoError) error();
+}
+
+void Stream::open_output_stream(DataSim *data, PaStreamCallback callback)
 {
 	err = Pa_OpenStream(
 		&output_stream,
@@ -198,6 +221,7 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
 	printf("% 3.2f%% Completed\n", (float)data.bitIndex * 100 / total);
 	if (err < 0) error();
 	stop_output_stream();
+	close_output_stream();
 	printf("###################### Sending has been done. #######################\n"); fflush(stdout);
 	if (writewaves)
 	{
@@ -222,6 +246,10 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
 		printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
 	}
 	if (err < 0) error();
+	stop_input_stream();
+	stop_output_stream();
+	close_input_stream();
+	close_output_stream();
 	if (data.send_data.wait)
 		printf("\nLINK ERROR!!\n");
 	else
@@ -254,6 +282,8 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
 		if (finished)
 			stop_input_stream();
 	}
+	if (err < 0) error();
+	close_input_stream();
 	printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n"); fflush(stdout);
 	size_t n = data.write_to_file("OUTPUT.bin");
 	printf("\n------ Writing is finished, %u bytes have been write to in total. ------------\n", n); fflush(stdout);
@@ -281,6 +311,10 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
 			stop_input_stream();
 	}
 	if (err < 0) error();
+	Pa_Sleep(500);
+	stop_output_stream();
+	close_input_stream();
+	close_output_stream();
 	printf("#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
 	size_t n = data.receive_data.write_to_file("OUTPUT.bin");
 	printf("\n------ Writing is finished, %u bytes have been write to in total. ------------\n", n); fflush(stdout);
@@ -294,6 +328,41 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
 	{
 		printf("\nYou choose get waves sent, now writing\n"); fflush(stdout);
 		size_t n = data.send_data.write_samples_to_file(file_wave_sent);
+		printf("\n---Writing waves sent is finished, %u samples have been write to in total.---\n", n); fflush(stdout);
+	}
+}
+
+void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* file_wave_sent,
+	bool write_rec_waves, const char* file_wave_rec)
+{
+	open_output_stream(&data, send_callback);
+	open_input_stream(&data, receive_callback);
+	start_output_stream();
+	start_input_stream();
+
+	printf("Waiting for receiving and sending to finish.\n");
+	while ((err = Pa_IsStreamActive(input_stream)) == 1)
+	{
+		bool finished = data.demodulate();
+	}
+	if (err < 0) error();
+	stop_input_stream();
+	stop_output_stream();
+	close_input_stream();
+	close_output_stream();
+	printf("#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
+	size_t n = data.receivedata.write_to_file("OUTPUT.bin");
+	printf("\n------ Writing is finished, %u bytes have been write to in total. ------------\n", n); fflush(stdout);
+	if (write_rec_waves)
+	{
+		printf("\nYou choose get waves received, now writing\n"); fflush(stdout);
+		size_t n = data.receivedata.write_samples_to_file(file_wave_rec);
+		printf("\n---Writing samples recorded is finished, %u samples have been write to in total.---\n", n); fflush(stdout);
+	}
+	if (write_sent_waves)
+	{
+		printf("\nYou choose get waves sent, now writing\n"); fflush(stdout);
+		size_t n = data.senddata.write_samples_to_file(file_wave_sent);
 		printf("\n---Writing waves sent is finished, %u samples have been write to in total.---\n", n); fflush(stdout);
 	}
 }

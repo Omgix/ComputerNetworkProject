@@ -21,12 +21,18 @@
     <ClCompile Include="transmit.cpp">
       <Filter>源文件</Filter>
     </ClCompile>
+    <ClCompile Include="crc-8.c">
+      <Filter>源文件</Filter>
+    </ClCompile>
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="crc.h">
       <Filter>头文件</Filter>
     </ClInclude>
     <ClInclude Include="pastream.h">
+      <Filter>头文件</Filter>
+    </ClInclude>
+    <ClInclude Include="crc-8.h">
       <Filter>头文件</Filter>
     </ClInclude>
   </ItemGroup>

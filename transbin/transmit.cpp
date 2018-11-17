@@ -3,16 +3,16 @@
 #include <cstdlib>
 #include <cmath>
 #include "crc.h"
-//#include <armadillo>
+#include <random>
+#include "crc-8.h"
 
-//using namespace arma;
-
-float THRESHOLD_SILENCE;
 bool in = false;
 bool first = true;
 
-float sine[SAMPLE_RATE / FREQUENCY_CARRIER] =
-{ +0.00000000f, +0.78183148f, +0.97492791f, +0.43388374f, -0.43388374f, -0.97492791f, -0.78183148f, };
+const float sine[PERIOD] =
+{ +0.38941834f, +0.92664883f, +0.92106099f, +0.37592812f, -0.38941834f, -0.92664883f, -0.92106099f, -0.37592812f };
+//const float cosine[PERIOD] =
+//{ +0.90044710f, +0.22134984f, -0.62442837f, -0.99999928f, -0.62255033f, +0.22369171f, +0.90148933f };
 const float preamble[LEN_PREAMBLE] =
 {
 +0.00000000f, +0.00278273f, +0.01113070f, +0.02504197f, +0.04450900f, +0.06951219f, +0.10001086f, +0.13593172f,
@@ -164,7 +164,7 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 							data->wait = false;
 							if (data->ack_timeout == ACK_INIT_TIMEOUT)
 								data->ack_timeout -= DURATION_SIGNAL;
-							data->bitIndex -= index / SAMPLES_PER_BIT;
+							data->bitIndex -= index / SAMPLES_PER_N_BIT * NUM_CARRIRER;
 						}
 						else if (*data->signal) // ACK received
 						{
@@ -200,20 +200,27 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 			}
 			else
 			{
-				unsigned phase = (index++) % (SAMPLE_RATE / FREQUENCY_CARRIER);
-				float frame = A * sine[phase];
-				int offset = data->bitIndex % BITS_PER_BYTE;
-				int indexBytes = data->bitIndex / BITS_PER_BYTE;
-				uint8_t bit = (data->data[indexBytes] & (1 << offset)) >> offset;
-				if (bit == 0)
-					frame *= -1.0f;
+				unsigned phase = (index++) % PERIOD;
+				float frameSin = A * sine[phase];
+				//float frameCos = A * cosine[phase];
+				int offsetSin = data->bitIndex % BITS_PER_BYTE;
+				int indexBytesSin= data->bitIndex / BITS_PER_BYTE;
+				//int offsetCos = (data->bitIndex + 1) % BITS_PER_BYTE;
+				//int indexBytesCos = (data->bitIndex + 1) / BITS_PER_BYTE;
+				uint8_t bitSin = (data->data[indexBytesSin] & (1 << offsetSin)) >> offsetSin;
+				//uint8_t bitCos = (data->data[indexBytesCos] & (1 << offsetCos)) >> offsetSin;
+				if (bitSin == 0)
+					frameSin *= -1.0f;
+				//if (bitCos == 0)
+					//frameCos *= -1.0f;
+				float frame = frameSin;// +frameCos;
 				data->samples[fileFrameIndex++] = frame;
 				*wptr++ = frame;
-				if (index % SAMPLES_PER_BIT == 0)
-					data->bitIndex++;
-				if ((data->mode == TRANSMITTER && (index>= SAMPLES_PER_BIT * BITS_NORMALPACKET || 
+				if (index % SAMPLES_PER_N_BIT == 0)
+					data->bitIndex += NUM_CARRIRER;
+				if ((data->mode == TRANSMITTER && (index>= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER || 
 					data->bitIndex >= data->totalBits)) ||
-					(data->mode == RECEIVER && index >= SAMPLES_PER_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC)))
+					(data->mode == RECEIVER && index >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC) / NUM_CARRIRER))
 				{
 					data->prepare_for_new_sending(); // Reset several index after sending a packet
 					if (data->need_ack || data->mode == RECEIVER)
@@ -233,11 +240,12 @@ int sendCallback(const void *inputBuffer, void *outputBuffer,
 	}
 }
 
-SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, milliseconds timeout_, bool need_ack_, Mode mode_, bool *ack_received_) :
+SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microseconds timeout_,
+	bool need_ack_, Mode mode_, bool *ack_received_, int dst) :
 	status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
 	bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(mode_ == RECEIVER ? true : need_ack_),
-	wait(mode_ == TRANSMITTER? false:true), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_), 
-	ack_timeout(timeout_), times_sent(0)
+	wait(mode_ == TRANSMITTER ? false : true), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
+	ack_timeout(timeout_), times_sent(0), ackNo(0)
 {
 	if (mode == TRANSMITTER)
 	{
@@ -259,10 +267,23 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 		unsigned remain = size;
 
 		uint8_t info[BYTES_INFO] = {};
+		info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
+		info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
+		info[INDEX_BYTE_TYPEID] |= (TYPEID_ACK << (OFFSET_TYPEID % 8));
 
 		for (int i = 0; i < numPacket; ++i)
 		{
 			unsigned numRead = remain < BYTES_CONTENT ? remain : BYTES_CONTENT;
+			
+			info[INDEX_BYTE_SIZE] = 0x0;
+			info[INDEX_BYTE_SIZE] |= (numRead << (OFFSET_SIZE % 8));
+			info[INDEX_BYTE_NO] = 0x0;
+			info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
+			crc8_t crc8 = crc8_init();
+			crc8 = crc8_update(crc8, info, BYTES_INFO - 1);
+			crc8 = crc8_finalize(crc8);
+			memcpy(info + BYTES_INFO - 1, &crc8, 1);
+
 			memcpy(ptr, info, BYTES_INFO);
 			ptr += BYTES_INFO;
 			fread(ptr, 1, numRead, file);
@@ -276,8 +297,8 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 			ptr += BYTES_CRC;
 		}
 		fclose(file);
-		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
-			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_BIT) * numPacket;
+		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
+			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER) * numPacket;
 		totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
 	}
 	else if (mode_ == RECEIVER)
@@ -285,12 +306,24 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, millise
 		size = BYTES_ACK_CONTENT;
 		if (!ext_data_ptr)
 			data = new uint8_t[size + BYTES_CRC + BYTES_INFO];
+
+		memset(data, 0, size + BYTES_CRC + BYTES_INFO);
+		data[INDEX_BYTE_SRC] |= (NODE << OFFSET_SRC);
+		data[INDEX_BYTE_DST] |= (dst << OFFSET_DST);
+		data[INDEX_BYTE_TYPEID] |= (TYPEID_ACK << OFFSET_TYPEID);
+		data[INDEX_BYTE_SIZE] = 0x0;
+		data[INDEX_BYTE_SIZE] |= (BYTES_ACK_CONTENT << (OFFSET_SIZE % 8));
+		crc8_t crc8 = crc8_init();
+		crc8 = crc8_update(crc8, data, BYTES_INFO - 1);
+		crc8 = crc8_finalize(crc8);
+
+		memcpy(data + BYTES_INFO - 1, &crc8, 1);
 		crc_t crc = crc_init();
 		crc = crc_update(crc, data, BYTES_ACK_CONTENT + BYTES_INFO);
 		crc = crc_finalize(crc);
 		memcpy(data + BYTES_ACK_CONTENT + BYTES_INFO, &crc, BYTES_CRC);
-		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_BIT + LEN_SIGNAL
-			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_BIT);
+		totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
+			+ (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER);
 		totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO);
 	}
 	if (!ext_sample_ptr)
@@ -309,7 +342,16 @@ void SendData::prepare_for_new_sending()
 {
 	isNewPacket = true;
 	if (mode == RECEIVER)
-		bitIndex -= packetFrameIndex / SAMPLES_PER_BIT;
+		bitIndex -= packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+}
+
+void SendData::set_ack_dst(const int dst)
+{
+	if (mode == RECEIVER)
+	{
+		data[INDEX_BYTE_DST] &= !(0xc);
+		data[INDEX_BYTE_DST] |= (dst << OFFSET_DST);
+	}
 }
 
 sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
@@ -317,7 +359,7 @@ sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
 	int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 	int channels = NUM_CHANNELS;
 	int srate = SAMPLE_RATE;
-	if (!path) path = "sendwaves.wav";
+	if (!path) path = mode == RECEIVER? "sendwaves_rx.wav" : "sendwaves_tx.wav";
 	SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
 	file.writeSync();
 
@@ -337,9 +379,11 @@ int receiveCallback(const void *inputBuffer, void *outputBuffer,
 	(void)timeInfo;
 	(void)statusFlags;
 	(void)userData;
+
 	unsigned long i;
 	int finished;
 	unsigned long framesCalc;
+
 	if (data->maxNumFrames - data->numSamplesReceived <= framesPerBuffer)
 	{
 		finished = paComplete;
@@ -367,8 +411,8 @@ int receiveCallback(const void *inputBuffer, void *outputBuffer,
 ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_,
 	bool need_ack_, Mode mode_, bool *ack_received_) :
 	status(WAITING), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr),
-	data(data_ == nullptr ? new uint8_t[max_time*SAMPLE_RATE / SAMPLES_PER_BIT] : (uint8_t *)data_),
-	samples(samples_ == nullptr ? new SAMPLE[max_time*SAMPLE_RATE] : samples_),
+	data(data_ == nullptr ? new uint8_t[max_time * SAMPLE_RATE / SAMPLES_PER_N_BIT * NUM_CARRIRER] : (uint8_t *)data_),
+	samples(samples_ == nullptr ? new SAMPLE[max_time*SAMPLE_RATE] : samples_), noPacket(0),
 	packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]),
 	bitsReceived(0), numSamplesReceived(0), maxNumFrames(max_time*SAMPLE_RATE),
 	frameIndex(INITIAL_INDEX_RX), startFrom(0), mode(mode_), signal(ack_received_),
@@ -411,20 +455,17 @@ void ReceiveData::correct_threshold()
 
 	for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
 		cur += samples[frameIndex - LEN_PREAMBLE + i] * preamble[i];
-	//fvec samp(samples + frameIndex - LEN_PREAMBLE, LEN_PREAMBLE, false, true);
-	//float result = dot(samp, Preamble);
 	if (abs(cur) > threshold)
 		threshold = abs(cur);
 }
 
 bool ReceiveData::correlate_next()
 {
+	if (amplitude <= THRESHOLD_SILENCE) return false;
 	SAMPLE cur = 0.0f;
 
 	for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
 		cur += samples[frameIndex - LEN_PREAMBLE + 1 + i] * preamble[i];
-	//fvec samp(samples + frameIndex - LEN_PREAMBLE + 1, LEN_PREAMBLE, false, true);
-	//float result = dot(samp, Preamble);
 	return abs(cur) >= threshold ? true : false;
 }
 
@@ -445,31 +486,40 @@ size_t ReceiveData::write_to_file(const char* path = nullptr)
 	return n;
 }
 
+static float diff[MAX_TIME_RECORD * SAMPLE_RATE];
+
 size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
 {
 	int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 	int channels = NUM_CHANNELS;
 	int srate = SAMPLE_RATE;
-	if (!path) path = "reveivewaves.wav";
+	SndfileHandle file1;
+	if (mode == RECEIVER)
+		file1 = SndfileHandle("diffrx.wav", SFM_WRITE, format, channels, srate);
+	else if (mode == TRANSMITTER)
+		file1 = SndfileHandle("difftx.wav", SFM_WRITE, format, channels, srate);
+	file1.writeSync();
+	file1.write(diff, frameIndex);
+	if (!path) path = mode == RECEIVER? "reveivewaves_rx.wav" : "reveivewaves_tx.wav";
 	SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
 	file.writeSync();
-	return file.write(samples, frameIndex - startFrom);
+	return file.write(samples, frameIndex);
 }
 
 bool ReceiveData::demodulate()
 {
 	while (frameIndex + 2 < numSamplesReceived)
 	{
+		diff[frameIndex] = numSamplesReceived - frameIndex;
 		if (frameIndex == INITIAL_INDEX_RX)
 		{
-			for (int i = 0; i < LEN_PREAMBLE; ++i)
+			for (int i = 0; i < PERIOD; ++i)
 				amplitude += abs(samples[frameIndex - i]);
-			THRESHOLD_SILENCE = 4;// amplitude * 5;
 		}
 		else
 		{
 			amplitude += abs(samples[frameIndex]);
-			amplitude -= abs(samples[frameIndex - LEN_PREAMBLE]);
+			amplitude -= abs(samples[frameIndex - PERIOD]);
 		}
 		if (status == RECEIVING && !in && mode == RECEIVER) {
 			if (first)
@@ -479,7 +529,6 @@ bool ReceiveData::demodulate()
 				startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
 				first = false;
 			}
-			//printf("New packet start from frame #%u\r", frameIndex); fflush(stdout);
 			in = true;
 		}
 		if (status == WAITING || status == ASSURING)
@@ -516,36 +565,37 @@ bool ReceiveData::demodulate()
 		}
 		else if (status == RECEIVING)
 		{
-			//printf("pac index: %u, total index: %u", packetFrameIndex, frameIndex - startFrom);
-			//assert(packetFrameIndex == frameIndex - LENGTH_PREAMBLE - LENGTH_SIGNAL - startFrom);
-			/*SAMPLE value = samples[frameIndex];
-			unsigned phase = packetFrameIndex % (SAMPLE_RATE / FREQUENCY_CARRIER);
-			demodulated[frameIndex] = value * sine[phase];*/
 			packetFrameIndex++;
 
-			if (packetFrameIndex % SAMPLES_PER_BIT == 0)
+			if (packetFrameIndex % SAMPLES_PER_N_BIT == 0)
 			{
-				int indexBytePacket = (packetFrameIndex / SAMPLES_PER_BIT - 1) / BITS_PER_BYTE;
-				int offset = (packetFrameIndex / SAMPLES_PER_BIT - 1) % BITS_PER_BYTE;
+				int indexBytePacketSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - NUM_CARRIRER) / BITS_PER_BYTE;
+				int offsetSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER -  NUM_CARRIRER) % BITS_PER_BYTE;
+				//int indexBytePacketCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) / BITS_PER_BYTE;
+				//int offsetCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) % BITS_PER_BYTE;
 				for (int i = 0; i < 5; ++i)
 				{
-					float value = 0.0f;
-					for (int j = SAMPLES_PER_BIT - 1; j >= 0; --j)
+					float valueSin = 0.0f;
+					//float valueCos = 0.0f;
+					for (int j = SAMPLES_PER_N_BIT - 1; j >= 0; --j)
 					{
-						unsigned phase = (packetFrameIndex - 1 - j) % (SAMPLE_RATE / FREQUENCY_CARRIER);
-						value += samples[frameIndex - j - align[i]] * sine[phase];
+						unsigned phase = (packetFrameIndex - 1 - j) % PERIOD;
+						valueSin += samples[frameIndex - j - align[i]] * sine[phase];
+						//valueCos += samples[frameIndex - j - align[i]] * cosine[phase];
 					}
-					if (value > THRESHOLD_DEMODULATE)
-						packet[i][indexBytePacket] = packet[i][indexBytePacket] | (1 << offset);
+					if (valueSin > THRESHOLD_DEMODULATE)
+						packet[i][indexBytePacketSin] = packet[i][indexBytePacketSin] | (1 << offsetSin);
+					//if (valueCos > THRESHOLD_DEMODULATE)
+						//packet[i][indexBytePacketCos] = packet[i][indexBytePacketCos] | (1 << offsetCos);
 				}
-				bitsReceived++;
+				bitsReceived += NUM_CARRIRER;
 			}
 			frameIndex++;
-			if ((mode == RECEIVER && (packetFrameIndex >= SAMPLES_PER_BIT * BITS_NORMALPACKET ||
+			if ((mode == RECEIVER && (packetFrameIndex >= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
 				bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))) ||
-				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO)))
+				(mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO) / NUM_CARRIRER))
 			{
-				unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_BIT;
+				unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
 				unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
 				uint8_t *wptr = data + indexByte;
 				int choice = 0;
@@ -587,10 +637,347 @@ DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_,
 {
 }
 
-DataSim::DataSim(const char *send_file, void *data_sent_, void *data_rec_,
-	SAMPLE *samples_sent_, SAMPLE *samples_rec_) : backoff(),
-	senddata(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, TRANSMITTER, nullptr),
-	ack(nullptr, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, RECEIVER, nullptr),
-	receivedata(MAX_TIME_RECORD, data_rec_, samples_rec_, true, RECEIVER, nullptr)
+DataSim::DataSim(const int dst_, const char *send_file, void *data_sent_, void *data_rec_,
+	SAMPLE *samples_sent_, SAMPLE *samples_rec_) : backoff_start(), backoff_time(0), max_backoff_const(1),
+	senddata(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, TRANSMITTER, nullptr), ack_queue(),
+	ack(nullptr, nullptr, nullptr, ACK_INIT_TIMEOUT, true, RECEIVER, nullptr), totalFramesSent(0), status(PENDDING),
+	receivedata(MAX_TIME_RECORD, data_rec_, samples_rec_, true, RECEIVER, nullptr), channel_free(false), 
+	send_started(false), dst(dst_), indexPacketSending(0), indexPacketReceiving(0)
 {
+	senddata.status = SendData::status::CONTENT;
+	ack.status = SendData::status::CONTENT;
+	receivedata.status = ReceiveData::status::DETECTING;
+	receivedata.threshold = 30.f;
+}
+
+DataSim::ack_entry::ack_entry(int from_, int no_): from(from_), no(no_)
+{}
+
+int send_callback(const void *inputBuffer, void *outputBuffer,
+				unsigned long framesPerBuffer,
+				const PaStreamCallbackTimeInfo *timeInfo,
+				PaStreamCallbackFlags statusFlags,
+				void* userData)
+{
+	(void)timeInfo;
+	(void)statusFlags;
+	(void)inputBuffer;
+
+	DataSim *simdata = (DataSim*)userData;
+	SAMPLE *wptr = (SAMPLE*)outputBuffer;
+	SendData *data = nullptr;
+
+	SendData &senddata = simdata->senddata;
+	SendData &ack = simdata->ack;
+	bool &channel_free = simdata->channel_free;
+	timepoint &backoff_start = simdata->backoff_start;
+	microseconds &backoff_time = simdata->backoff_time;
+	int &max_backoff_const = simdata->max_backoff_const;
+	unsigned &totalFramesSent = simdata->totalFramesSent;
+	bool &send_started = simdata->send_started;
+	std::queue<DataSim::ack_entry> &ack_queue = simdata->ack_queue;
+
+	for (unsigned long i = 0; i < framesPerBuffer; ++i)
+	{
+		if (simdata->status == DataSim::status::PENDDING)
+		{
+			*wptr++ = SAMPLE_SILENCE;
+			senddata.samples[totalFramesSent++] = SAMPLE_SILENCE;
+			if (send_started && senddata.wait) // check if need retransmit by the time spent from the sending of the last content packet
+			{
+				if (std::chrono::system_clock::now() > senddata.time_send + senddata.ack_timeout) // Need retransmit
+				{
+					static std::default_random_engine e;
+					static std::uniform_int_distribution<int> u(0, 1023);
+					senddata.bitIndex -= senddata.packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+					senddata.times_sent++;
+					senddata.wait = false;
+					max_backoff_const *= 2;
+					backoff_time = (u(e) % max_backoff_const) * SLOT;
+				}
+			}
+			if (channel_free) // Check if the channel is free.
+			{
+				if (!ack_queue.empty())
+				{
+					DataSim::ack_entry nextACK = ack_queue.front();
+					ack_queue.pop();
+					ack.set_ack_dst(nextACK.from);
+					data = &ack;
+					simdata->status = DataSim::SEND_ACK;
+				}
+				else if (std::chrono::system_clock::now() - backoff_start < backoff_time + DIFS) // In backoff
+				{
+					continue;
+				}
+				else if (!senddata.wait || !send_started)
+				{
+					if (senddata.bitIndex == senddata.totalBits) return paComplete;
+					data = &senddata;
+					simdata->status = DataSim::SEND_CONTENT;
+				}
+			}
+			else if (!channel_free)
+			{
+				backoff_start = std::chrono::system_clock::now();
+				continue;
+			}
+		}
+		else if (simdata->status == DataSim::SEND_ACK || simdata->status == DataSim::SEND_CONTENT)
+		{
+			unsigned &index = data->packetFrameIndex;
+			if (simdata->status == DataSim::SEND_CONTENT) send_started = true;
+			if (data->isNewPacket)
+			{
+				data->isNewPacket = false;
+				data->isPreamble = true;
+				index = 0;
+			}
+			if (data->isPreamble)
+			{
+				/* If in the process of generating preamble of 512 samples, 11.6ms */
+				*wptr++ = preamble[index];
+				data->samples[totalFramesSent++] = preamble[index];
+				if (++index >= LEN_PREAMBLE)
+				{
+					index = 0;
+					data->isPreamble = false;
+				}
+			}
+			else
+			{
+				/* Demodulation part, need not to know the detail */
+				unsigned phase = (index++) % PERIOD;
+				float frameSin = A * sine[phase];
+				//float frameCos = A * cosine[phase];
+				int offsetSin = data->bitIndex % BITS_PER_BYTE;
+				int indexBytesSin = data->bitIndex / BITS_PER_BYTE;
+				//int offsetCos = (data->bitIndex + 1) % BITS_PER_BYTE;
+				//int indexBytesCos = (data->bitIndex + 1) / BITS_PER_BYTE;
+				uint8_t bitSin = (data->data[indexBytesSin] & (1 << offsetSin)) >> offsetSin;
+				//uint8_t bitCos = (data->data[indexBytesCos] & (1 << offsetCos)) >> offsetSin;
+				if (bitSin == 0)
+					frameSin *= -1.0f;
+				//if (bitCos == 0)
+					//frameCos *= -1.0f;
+				float frame = frameSin;// +frameCos;
+				data->samples[totalFramesSent++] = frame;
+				*wptr++ = frame;
+				if (index % SAMPLES_PER_N_BIT == 0)
+					data->bitIndex += NUM_CARRIRER;
+				if ((simdata->status == DataSim::SEND_CONTENT &&  // A packet has been sent, do something for pending
+						(index >= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER || data->bitIndex >= data->totalBits)) 
+					|| (simdata->status == DataSim::SEND_ACK && index >= SAMPLES_PER_N_BIT * BITS_ACKPACKET / NUM_CARRIRER))
+				{
+					data->isNewPacket = true;
+					if (simdata->status == DataSim::SEND_ACK)
+						data->bitIndex -= data->packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+					else if (simdata->status == DataSim::SEND_CONTENT)
+					{
+						data->time_send = std::chrono::system_clock::now();
+						data->wait = true;
+						max_backoff_const = 1;
+					}
+				}
+			}
+		}
+	}
+	return paContinue;
+}
+
+int receive_callback(const void *inputBuffer, void *outputBuffer,
+	unsigned long framesPerBuffer,
+	const PaStreamCallbackTimeInfo *timeInfo,
+	PaStreamCallbackFlags statusFlags,
+	void* userData)
+{
+	const SAMPLE* rptr = (const SAMPLE*)inputBuffer;
+	DataSim *data = (DataSim*)userData;
+	ReceiveData &receivedata = data->receivedata;
+	bool &channel_free = data->channel_free;
+
+	(void)outputBuffer; /* Prevent unused variable warnings. */
+	(void)timeInfo;
+	(void)statusFlags;
+
+	unsigned long i;
+	int finished;
+	unsigned long framesCalc;
+
+	if (receivedata.maxNumFrames - receivedata.numSamplesReceived <= framesPerBuffer)
+	{
+		finished = paComplete;
+		framesCalc = receivedata.maxNumFrames - receivedata.numSamplesReceived;
+	}
+	else
+	{
+		finished = paContinue;
+		framesCalc = framesPerBuffer;
+	}
+
+	if (inputBuffer == NULL)
+	{
+		for (i = 0; i < framesCalc; i++)
+			receivedata.samples[receivedata.numSamplesReceived++] = SAMPLE_SILENCE;
+	}
+	else
+	{
+		for (i = 0; i < framesCalc; i++) 
+		{
+			receivedata.samples[receivedata.numSamplesReceived++] = (*rptr++) * CONSTANT_AMPLIFY;
+			if (receivedata.numSamplesReceived >= PERIOD)
+			{
+				float ampl = 0.0f;
+				for (int j = 0; j < PERIOD; ++j)
+					ampl += receivedata.samples[receivedata.numSamplesReceived - j];
+				if (ampl > THRESHOLD_SILENCE)
+					channel_free = false;
+				else if (ampl <= THRESHOLD_SILENCE)
+					channel_free = true;
+			}
+		}
+	}
+	return finished;
+}
+
+bool DataSim::demodulate()
+{
+	unsigned &frameIndex = receivedata.frameIndex;
+	unsigned &numSamplesReceived = receivedata.numSamplesReceived;
+	unsigned &packetFrameIndex = receivedata.packetFrameIndex;
+	unsigned &bitsReceived = receivedata.bitsReceived;
+	int &typeID = receivedata.typeID;
+	int &src = receivedata.src;
+	int &noPacket = receivedata.noPacket;
+	unsigned &bytesPacketContent = receivedata.bytesPacketContent;
+	SAMPLE &amplitude = receivedata.amplitude;
+	SAMPLE *samples = receivedata.samples;
+
+	while (frameIndex + 2 < numSamplesReceived)
+	{
+		diff[frameIndex] = numSamplesReceived - frameIndex;
+		if (frameIndex == INITIAL_INDEX_RX)
+		{
+			for (int i = 0; i < PERIOD; ++i)
+				amplitude += abs(samples[frameIndex - i]);
+		}
+		else
+		{
+			amplitude += abs(samples[frameIndex]);
+			amplitude -= abs(samples[frameIndex - PERIOD]);
+		}
+		if (receivedata.status == ReceiveData::status::RECEIVING && !in) {
+			if (first)
+			{
+				printf("Start receiving!\n");
+				printf("Start from frame #%u\n", frameIndex);
+				receivedata.startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
+				first = false;
+			}
+			in = true;
+		}
+		if (receivedata.status == ReceiveData::status::DETECTING)
+		{
+			packetFrameIndex++;
+
+			bool getHeader = receivedata.correlate_next();
+			frameIndex++;
+			if (getHeader)
+			{
+				receivedata.status = ReceiveData::status::RECEIVING;
+				packetFrameIndex = 0;
+			}
+		}
+		else if (receivedata.status == ReceiveData::status::RECEIVING)
+		{
+			packetFrameIndex++;
+
+			if (packetFrameIndex % SAMPLES_PER_N_BIT == 0)
+			{
+				int indexBytePacketSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - NUM_CARRIRER) / BITS_PER_BYTE;
+				int offsetSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - NUM_CARRIRER) % BITS_PER_BYTE;
+				//int indexBytePacketCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) / BITS_PER_BYTE;
+				//int offsetCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) % BITS_PER_BYTE;
+				for (int i = 0; i < 5; ++i)
+				{
+					float valueSin = 0.0f;
+					//float valueCos = 0.0f;
+					for (int j = SAMPLES_PER_N_BIT - 1; j >= 0; --j)
+					{
+						unsigned phase = (packetFrameIndex - 1 - j) % PERIOD;
+						valueSin += samples[frameIndex - j - receivedata.align[i]] * sine[phase];
+						//valueCos += samples[frameIndex - j - align[i]] * cosine[phase];
+					}
+					if (valueSin > THRESHOLD_DEMODULATE)
+						receivedata.packet[i][indexBytePacketSin] |= (1 << offsetSin);
+					//if (valueCos > THRESHOLD_DEMODULATE)
+						//packet[i][indexBytePacketCos] = packet[i][indexBytePacketCos] | (1 << offsetCos);
+				}
+				bitsReceived += NUM_CARRIRER;
+			}
+			frameIndex++;
+			if (packetFrameIndex % (SAMPLES_PER_N_BIT * BITS_INFO) == 0)
+			{
+				int choice = -1;
+				for (int i = 0; i < 5; ++i)
+				{
+					crc8_t crc8 = crc8_init();
+					crc8 = crc8_update(crc8, receivedata.packet[i], BYTES_INFO - 1);
+					crc8 = crc8_finalize(crc8);
+					if (crc8 == 0x0) {
+						choice = i;
+						break;
+					}
+				}
+				if (choice == -1) 
+				{ receivedata.prepare_for_new_packet(); continue; }
+				int destination = (receivedata.packet[choice][INDEX_BYTE_DST] >> (OFFSET_DST % 8)) & 0x3;
+				//if (destination != NODE) 
+					//receivedata.prepare_for_new_packet(); // Check if the packet's dst is itself
+				src = (receivedata.packet[choice][INDEX_BYTE_SRC] >> (OFFSET_SRC % 8)) & 0x3;
+				typeID = (receivedata.packet[choice][INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
+				bytesPacketContent = (receivedata.packet[choice][INDEX_BYTE_SIZE] >> (OFFSET_SIZE % 8)) & 0xff;
+				noPacket = (receivedata.packet[choice][INDEX_BYTE_NO] >> (OFFSET_NO % 8)) & 0xff;
+			}
+			else if (packetFrameIndex >= SAMPLES_PER_N_BIT * (BITS_INFO + bytesPacketContent*8 + BITS_CRC) / NUM_CARRIRER)
+			{
+				unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+				unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
+				uint8_t *wptr = receivedata.data + indexByte;
+				int choice = -1;
+				for (int i = 0; i < 5; ++i)
+				{
+					crc_t crc = crc_init();
+					crc = crc_update(crc, receivedata.packet[i], bitsReceivedPacket / BITS_PER_BYTE);
+					crc = crc_finalize(crc);
+					if (crc == 0x48674bc7) {
+						choice = i;
+						break;
+					}
+				}
+				if (choice == -1)
+					receivedata.prepare_for_new_packet();
+				else if (typeID == TYPEID_ACK)
+				{
+					if (noPacket == indexPacketSending)
+					{
+						senddata.wait = false;
+						indexPacketSending++;
+						receivedata.prepare_for_new_packet();
+					}
+				}
+				else if (typeID == TYPEID_CONTENT)
+				{
+					if (noPacket == indexPacketReceiving)
+					{
+						memcpy(wptr, receivedata.packet[choice] + BYTES_INFO,
+							bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC - BYTES_INFO);
+						indexPacketReceiving++;
+					}
+					ack_queue.push(ack_entry(src, noPacket));
+				}
+			}
+		}
+	}
+	return false;
 }

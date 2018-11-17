@@ -19,12 +19,14 @@
     </ProjectConfiguration>
   </ItemGroup>
   <ItemGroup>
+    <ClCompile Include="crc-8.c" />
     <ClCompile Include="crc.c" />
     <ClCompile Include="main.cpp" />
     <ClCompile Include="pastream.cpp" />
     <ClCompile Include="transmit.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="crc-8.h" />
     <ClInclude Include="crc.h" />
     <ClInclude Include="pastream.h" />
   </ItemGroup>
