@@ -9,9 +9,10 @@ const char Wellcome[] =
 "                           version 0.2                             \n"
 "                                                                   \n"
 "===================================================================\n"
-"Please enter a number to choose an option : \n";
+"Please enter a number to choose an option :";
 
 const char Options[] =
+"\n"
 "    1.Send a file.\n"
 "    2.Receive a file.\n"
 "    3.Send with ACK.\n"
@@ -25,11 +26,9 @@ const char InvalidOption[] =
 const char InvalidDeviceNo[] =
 "Invalid device number, please enter again: ";
 
-char FileName[256];
-
 int Stream::numStream = 0;
-uint8_t data_sent[15000];
-uint8_t data_rec[15000];
+uint8_t data_sent[10000];
+uint8_t data_rec[10000];
 SAMPLE samples_sent[MAX_TIME_RECORD * SAMPLE_RATE];
 SAMPLE samples_rec[MAX_TIME_RECORD * SAMPLE_RATE];
 
@@ -97,6 +96,9 @@ int main()
 			char wavesent[32];
 			char wavereceived[32];
 
+			BITS_CONTENT = 600;
+			BYTES_CONTENT = BITS_CONTENT / 8;
+			BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT + BITS_INFO;
 			printf("Please input host node number: ");
 			scanf("%d", &NODE);
 			printf("Please input destination node number: ");
