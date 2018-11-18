@@ -54,7 +54,7 @@ const int BITS_PER_BYTE = 8;
 const int TIMES_TRY = 10;
 
 const microseconds ACK_INIT_TIMEOUT(313000);
-const microseconds ACK_JAMMING_TIMEOUT(313000);
+const microseconds ACK_JAMMING_TIMEOUT(813000);
 const microseconds DURATION_SIGNAL(23000);
 const microseconds RTT(150000);
 const microseconds SIFS = microseconds(SAMPLES_PER_N_BIT * BITS_ACKPACKET * 1000000 / SAMPLE_RATE) + RTT;
@@ -79,6 +79,8 @@ const int TYPEID_ACK = 3;
 const int TYPEID_ACK_LAST = 5;
 const int TYPEID_NONE = 0xf;
 extern int NODE;
+
+extern float square[MAX_TIME_RECORD * SAMPLE_RATE];
 
 class Stream
 {
@@ -296,7 +298,9 @@ private:
 	{
 		SEND_ACK,
 		SEND_CONTENT,
-		PENDDING
+		SEND_CONTENT2,
+		PENDDING,
+		PENDDING2
 	};
 	status status;
 	bool channel_free;

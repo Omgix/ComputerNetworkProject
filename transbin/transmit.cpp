@@ -8,6 +8,7 @@
 
 bool in = false;
 bool first = true;
+float square[MAX_TIME_RECORD * SAMPLE_RATE];
 
 //fvec Preamble(preamble, LEN_PREAMBLE);
 
@@ -446,13 +447,13 @@ size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
 	int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
 	int channels = NUM_CHANNELS;
 	int srate = SAMPLE_RATE;
-	SndfileHandle file1;
-	if (mode == RECEIVER)
-		file1 = SndfileHandle("diffrx.wav", SFM_WRITE, format, channels, srate);
-	else if (mode == TRANSMITTER)
-		file1 = SndfileHandle("difftx.wav", SFM_WRITE, format, channels, srate);
-	file1.writeSync();
-	file1.write(diff, frameIndex);
+	//SndfileHandle file1;
+	//if (NODE == 1)
+		//file1 = SndfileHandle("diff1.wav", SFM_WRITE, format, channels, srate);
+	//else if (NODE == 2)
+		//file1 = SndfileHandle("diff2.wav", SFM_WRITE, format, channels, srate);
+	//file1.writeSync();
+	//file1.write(diff, frameIndex);
 	if (!path) path = mode == RECEIVER? "reveivewaves_rx.wav" : "reveivewaves_tx.wav";
 	SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
 	file.writeSync();
@@ -636,7 +637,7 @@ int send_callback(const void *inputBuffer, void *outputBuffer,
 
 	for (unsigned long i = 0; i < framesPerBuffer; ++i)
 	{
-		if (simdata->status == DataSim::status::PENDDING)
+		if (simdata->status == DataSim::status::PENDDING || simdata->status == DataSim::status::PENDDING2)
 		{
 			*wptr++ = SAMPLE_SILENCE;
 			samples[totalFramesSent++] = SAMPLE_SILENCE;
@@ -665,21 +666,25 @@ int send_callback(const void *inputBuffer, void *outputBuffer,
 					data = &ack;
 					simdata->status = DataSim::SEND_ACK;
 				}
-				else if (std::chrono::system_clock::now() - backoff_start < backoff_time + DIFS) // In backoff
+				/*else if (std::chrono::system_clock::now() - backoff_start < backoff_time + DIFS) // In backoff
 				{
 					continue;
-				}
-				else if (!senddata.wait || !send_started)
+				}*/
+				else if (!senddata.wait || !send_started || 
+					(senddata.wait && simdata->status == DataSim::status::PENDDING2))
 				{
 					if (simdata->indexPacketSending < ceil((float)senddata.size / BYTES_CONTENT))
 					{
 						data = &senddata;
+						//data->bitIndex = simdata->indexPacketReceiving * BITS_NORMALPACKET;
+						if ((senddata.wait && simdata->status == DataSim::status::PENDDING2))
 						simdata->status = DataSim::SEND_CONTENT;
 					}
 				}
 			}
 			else if (!channel_free)
 			{
+				if (simdata->receivedata.status == ReceiveData::RECEIVING) backoff_time = -DIFS;
 				backoff_start = std::chrono::system_clock::now();
 				continue;
 			}
@@ -735,6 +740,10 @@ int send_callback(const void *inputBuffer, void *outputBuffer,
 						data->bitIndex -= index / SAMPLES_PER_N_BIT * NUM_CARRIRER;
 					else if (simdata->status == DataSim::SEND_CONTENT)
 					{
+						static std::default_random_engine e(NODE);
+						static std::uniform_int_distribution<int> u(600, 1023);
+
+						data->ack_timeout = microseconds(u(e) * 1000);
 						data->time_send = std::chrono::system_clock::now();
 						data->wait = true;
 						max_backoff_const = 1;
@@ -789,13 +798,18 @@ int receive_callback(const void *inputBuffer, void *outputBuffer,
 		for (i = 0; i < framesCalc; i++) 
 		{
 			receivedata.samples[receivedata.numSamplesReceived++] = (*rptr++) * CONSTANT_AMPLIFY;
-			if (receivedata.numSamplesReceived >= PERIOD)
+			if (receivedata.numSamplesReceived >= 60)
 			{
 				float ampl = 0.0f;
-				for (int j = 0; j < PERIOD; ++j)
-					ampl += abs(receivedata.samples[receivedata.numSamplesReceived - j]);
-				if (ampl > THRESHOLD_SILENCE && receivedata.status != ReceiveData::RECEIVING)
-					channel_free = false;
+				float sqr = 0.0f;
+				//for (int j = 0; j < 6; ++j)
+					//ampl += receivedata.samples[receivedata.numSamplesReceived - j];
+				for (int j = 0; j < 30; ++j)
+					sqr += receivedata.samples[receivedata.numSamplesReceived - j] * receivedata.samples[receivedata.numSamplesReceived - j];
+				square[receivedata.numSamplesReceived] = sqr;
+				diff[receivedata.numSamplesReceived] = receivedata.numSamplesReceived - data->totalFramesSent;
+				if (sqr > 0.25)
+					channel_free = true;
 				else
 					channel_free = true;
 			}
@@ -819,7 +833,6 @@ bool DataSim::demodulate()
 
 	while (frameIndex + 2 < numSamplesReceived)
 	{
-		diff[frameIndex] = numSamplesReceived - frameIndex;
 		if (frameIndex == INITIAL_INDEX_RX)
 		{
 			for (int i = 0; i < PERIOD; ++i)
@@ -884,6 +897,7 @@ bool DataSim::demodulate()
 				}
 				if (choice == -1)
 				{
+					bitsReceived -= BITS_INFO;
 					receivedata.prepare_for_new_packet(); continue;
 				}
 				int destination = (receivedata.packet[choice][INDEX_BYTE_DST] >> (OFFSET_DST % 8)) & 0x3;
@@ -915,6 +929,7 @@ bool DataSim::demodulate()
 				}
 				if (choice == -1)
 				{
+					bitsReceived -= bitsReceivedPacket;
 					receivedata.prepare_for_new_packet();
 					continue;
 				}

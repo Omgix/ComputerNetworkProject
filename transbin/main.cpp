@@ -96,7 +96,7 @@ int main()
 			char wavesent[32];
 			char wavereceived[32];
 
-			BITS_CONTENT = 600;
+			BITS_CONTENT = 480;
 			BYTES_CONTENT = BITS_CONTENT / 8;
 			BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT + BITS_INFO;
 			printf("Please input host node number: ");

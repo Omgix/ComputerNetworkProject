@@ -337,8 +337,8 @@ void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* 
 	open_output_stream(&data, send_callback);
 	open_input_stream(&data, receive_callback);
 	data.backoff_start = std::chrono::system_clock::now();
-	start_output_stream();
 	start_input_stream();
+	start_output_stream();
 
 	unsigned total = data.senddata.totalBits;
 	printf("Waiting for receiving and sending to finish.\n");
@@ -363,9 +363,15 @@ void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* 
 
 	char outputfile[16];
 	sprintf(outputfile, "OUTPUT%dto%d.bin", data.dst, NODE);
-	data.receivedata.bitsReceived -= 32;
 	printf("\n#### Receiving is finished!! Now write the data to the file %s. ####\n", outputfile);
 	size_t n = data.receivedata.write_to_file(outputfile);
+	sprintf(outputfile, "square%d.wav", NODE);
+	int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
+	int channels = NUM_CHANNELS;
+	int srate = SAMPLE_RATE;
+	SndfileHandle file = SndfileHandle(outputfile, SFM_WRITE, format, channels, srate);
+	file.writeSync();
+	file.write(square, data.receivedata.frameIndex);
 	printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
 
 	if (write_rec_waves)
