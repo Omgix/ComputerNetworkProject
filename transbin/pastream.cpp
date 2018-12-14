@@ -207,7 +207,7 @@ bool Stream::select_output_device(int device_no)
 
 void Stream::send(SendData &data, bool writewaves, const char* file_name)
 {
-	open_output_stream(&data, sendCallback);
+	open_output_stream(&data, SendData::sendCallback);
 	start_output_stream();
 
 	printf("Waiting for sending to finish.\n");
@@ -235,8 +235,8 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
 {
 	printf("Waiting for sending to finish.\n");
 	unsigned total = data.send_data.totalBits;
-	open_input_stream(&data.receive_data, receiveCallback);
-	open_output_stream(&data.send_data, sendCallback);
+	open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
+	open_output_stream(&data.send_data, SendData::sendCallback);
 	start_input_stream();
 	start_output_stream();
 	while ((err = Pa_IsStreamActive(output_stream)) == 1)
@@ -269,7 +269,7 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
 
 void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
 {
-	open_input_stream(&data, receiveCallback);
+	open_input_stream(&data, ReceiveData::receiveCallback);
 	start_input_stream();
 
 	printf("\n===================== Now receiving!! Please wait. =====================\n"); fflush(stdout);
@@ -296,8 +296,8 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
 void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_sent,
 	bool write_rec_waves, const char* file_wave_rec)
 {
-	open_output_stream(&data.send_data, sendCallback);
-	open_input_stream(&data.receive_data, receiveCallback);
+	open_output_stream(&data.send_data, SendData::sendCallback);
+	open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
 	start_output_stream();
 	start_input_stream();
 
@@ -334,8 +334,8 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
 void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* file_wave_sent,
 							bool write_rec_waves, const char* file_wave_rec)
 {
-	open_output_stream(&data, send_callback);
-	open_input_stream(&data, receive_callback);
+	open_output_stream(&data, DataSim::send_callback);
+	open_input_stream(&data, DataSim::receive_callback);
 	data.backoff_start = std::chrono::system_clock::now();
 	start_input_stream();
 	start_output_stream();

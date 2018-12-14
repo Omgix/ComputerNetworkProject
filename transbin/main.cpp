@@ -1,6 +1,5 @@
 ﻿#include "pastream.h"
 #include <cstdio>
-#include <windows.h>
 
 const char Wellcome[] =
 "===================================================================\n"
@@ -41,12 +40,10 @@ int BITS_NORMALPACKET;
 
 int main()
 {
-	SetConsoleOutputCP(65001);
 	printf("%s", Wellcome);
 	printf("%s", Options);
 
 	Stream stream(-1, -1);
-	Pa_HostApiTypeIdToHostApiIndex(paWASAPI);
 
 	while (true)
 	{

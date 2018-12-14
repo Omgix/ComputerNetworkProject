@@ -123,12 +123,6 @@ public:
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 };
 
-int sendCallback(const void *inputBuffer, void *outputBuffer,
-	unsigned long framesPerBuffer,
-	const PaStreamCallbackTimeInfo *timeInfo,
-	PaStreamCallbackFlags statusFlags,
-	void* userData);
-
 enum Mode
 {
 	TRANSMITTER,
@@ -167,11 +161,6 @@ private:
 	unsigned ackNo;
 	inline void prepare_for_new_sending();
 	void set_ack(const int dst, const int no, const bool last);
-	friend int sendCallback(const void *inputBuffer, void *outputBuffer,
-		unsigned long framesPerBuffer,
-		const PaStreamCallbackTimeInfo *timeInfo,
-		PaStreamCallbackFlags statusFlags,
-		void* userData);
 	friend int send_callback(const void *inputBuffer, void *outputBuffer,
 		unsigned long framesPerBuffer,
 		const PaStreamCallbackTimeInfo *timeInfo,
@@ -185,19 +174,19 @@ private:
 	friend class Stream;
 	friend class DataSim;
 public:
-	SendData(const char* file_name, void *data_ = nullptr, SAMPLE *samples_ = nullptr, microseconds timeout_ = microseconds(2000000),
-		bool need_ack_ = false, Mode mode_ = TRANSMITTER, bool *ack_received_ = nullptr, int dst = 0);
+	explicit SendData(const char* file_name, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
+	        microseconds timeout_ = microseconds(2000000), bool need_ack_ = false,
+	        Mode mode_ = TRANSMITTER, bool *ack_received_ = nullptr, int dst = 0);
 	~SendData();
 	SendData(const SendData &rhs) = delete;
 	SendData &operator=(const SendData &rhs) = delete;
+    static int sendCallback(const void *inputBuffer, void *outputBuffer,
+                            unsigned long framesPerBuffer,
+                            const PaStreamCallbackTimeInfo *timeInfo,
+                            PaStreamCallbackFlags statusFlags,
+                            void* userData);
 	sf_count_t write_samples_to_file(const char *path); // Write sound data that has been sent to a WAV file
 };
-
-int receiveCallback(const void *inputBuffer, void *outputBuffer,
-	unsigned long framesPerBuffer,
-	const PaStreamCallbackTimeInfo *timeInfo,
-	PaStreamCallbackFlags statusFlags,
-	void* userData);
 
 class ReceiveData
 {
@@ -237,11 +226,6 @@ private:
 	void correct_threshold();               // Adjusting convolution threshold in status ASSURING
 	bool correlate_next();                  // Calculate the convolution
 	bool demodulate();                      // Demodulate received frames
-	friend int receiveCallback(const void *inputBuffer, void *outputBuffer,
-		unsigned long framesPerBuffer,
-		const PaStreamCallbackTimeInfo *timeInfo,
-		PaStreamCallbackFlags statusFlags,
-		void* userData);
 	friend int send_callback(const void *inputBuffer, void *outputBuffer,
 		unsigned long framesPerBuffer,
 		const PaStreamCallbackTimeInfo *timeInfo,
@@ -255,11 +239,16 @@ private:
 	friend class Stream;
 	friend class DataSim;
 public:
-	ReceiveData(unsigned max_time, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
+	explicit ReceiveData(unsigned max_time, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
 		bool need_ack_ = false, Mode mode_ = RECEIVER, bool *ack_received_ = nullptr);
 	~ReceiveData();
 	ReceiveData(const ReceiveData &rhs) = delete;
 	ReceiveData &operator=(const ReceiveData &rhs) = delete;
+    static int receiveCallback(const void *inputBuffer, void *outputBuffer,
+                        unsigned long framesPerBuffer,
+                        const PaStreamCallbackTimeInfo *timeInfo,
+                        PaStreamCallbackFlags statusFlags,
+                        void* userData);
 	size_t write_to_file(const char* path); // Write received content data to a TXT file
 	size_t write_samples_to_file(const char* path); // Write recorded sound data to a WAV file
 };
@@ -273,23 +262,11 @@ private:
 	ReceiveData receive_data;
 	friend class Stream;
 public:
-	DataCo(Mode mode_, const char *send_file = nullptr, void *data_sent_ = nullptr,
+	explicit DataCo(Mode mode_, const char *send_file = nullptr, void *data_sent_ = nullptr,
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
 };
-
-int send_callback(const void *inputBuffer, void *outputBuffer,
-	unsigned long framesPerBuffer,
-	const PaStreamCallbackTimeInfo *timeInfo,
-	PaStreamCallbackFlags statusFlags,
-	void* userData);
-
-int receive_callback(const void *inputBuffer, void *outputBuffer,
-	unsigned long framesPerBuffer,
-	const PaStreamCallbackTimeInfo *timeInfo,
-	PaStreamCallbackFlags statusFlags,
-	void* userData);
 
 class DataSim
 {
@@ -318,16 +295,6 @@ private:
 	unsigned indexPacketReceiving;
 	bool send_finished;
 	bool receive_finished;
-	friend int send_callback(const void *inputBuffer, void *outputBuffer,
-		unsigned long framesPerBuffer,
-		const PaStreamCallbackTimeInfo *timeInfo,
-		PaStreamCallbackFlags statusFlags,
-		void* userData);
-	 friend int receive_callback(const void *inputBuffer, void *outputBuffer,
-		unsigned long framesPerBuffer,
-		const PaStreamCallbackTimeInfo *timeInfo,
-		PaStreamCallbackFlags statusFlags,
-		void* userData);
 	bool demodulate();
 	friend class Stream;
 	class ack_entry
@@ -345,9 +312,19 @@ private:
 	};
 	std::queue<ack_entry> ack_queue;
 public:
-	DataSim(const int dst_, const char *send_file = nullptr, void *data_sent_ = nullptr,
+	explicit DataSim(const int dst_, const char *send_file = nullptr, void *data_sent_ = nullptr,
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataSim(const DataSim &rhs) = delete;
+    static int send_callback(const void *inputBuffer, void *outputBuffer,
+                      unsigned long framesPerBuffer,
+                      const PaStreamCallbackTimeInfo *timeInfo,
+                      PaStreamCallbackFlags statusFlags,
+                      void* userData);
+    static int receive_callback(const void *inputBuffer, void *outputBuffer,
+                         unsigned long framesPerBuffer,
+                         const PaStreamCallbackTimeInfo *timeInfo,
+                         PaStreamCallbackFlags statusFlags,
+                         void* userData);
 	DataSim &operator=(const DataSim &rhs) = delete;
 };
 
