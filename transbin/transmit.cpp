@@ -32,7 +32,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
     if (data->status == SendData::status::SIGNAL)
     {
         unsigned long frames = framesPerBuffer;
-        if (data->mode == RECEIVER && data->wait)
+        if (data->in_mode(RECEIVER) && data->wait)
         {
             unsigned i;
             for (i = 0; i < framesPerBuffer; ++i)
@@ -84,7 +84,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 {
                     *wptr++ = SAMPLE_SILENCE;
                     data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
-                    if (data->mode == TRANSMITTER)
+                    if (data->in_mode(TRANSMITTER))
                     {
                         if (std::chrono::system_clock::now() > data->time_send + data->ack_timeout) // Time out! Retransmit
                         {
@@ -106,7 +106,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                                 data->ack_timeout -= DURATION_SIGNAL;
                         }
                     }
-                    else if (data->mode == RECEIVER)
+                    else if (data->in_mode(RECEIVER))
                     {
                         if (*data->signal)
                             data->wait = false;
@@ -148,18 +148,18 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 *wptr++ = frame;
                 if (index % SAMPLES_PER_N_BIT == 0)
                     data->bitIndex += NUM_CARRIRER;
-                if ((data->mode == TRANSMITTER && (index>= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER || 
+                if ((data->in_mode(TRANSMITTER) && (index>= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
                     data->bitIndex >= data->totalBits)) ||
-                    (data->mode == RECEIVER && index >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC) / NUM_CARRIRER))
+                    (data->in_mode(RECEIVER) && index >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC) / NUM_CARRIRER))
                 {
                     data->prepare_for_new_sending(); // Reset several index after sending a packet
-                    if (data->need_ack || data->mode == RECEIVER)
+                    if (data->need_ack || data->in_mode(RECEIVER))
                     {
                         data->time_send = std::chrono::system_clock::now();
                         data->wait = true;
                         *data->signal = false;
                     }
-                    if (data->mode == TRANSMITTER && data->bitIndex >= data->totalBits && !data->need_ack)
+                    if (data->in_mode(TRANSMITTER) && data->bitIndex >= data->totalBits && !data->need_ack)
                         return paComplete;
                 }
 
@@ -173,11 +173,11 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
 SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microseconds timeout_,
     bool need_ack_, Mode mode_, bool *ack_received_, int dst) :
     status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
-    bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(mode_ == RECEIVER ? true : need_ack_),
-    wait(!(mode_ == TRANSMITTER)), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
+    bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? true : need_ack_),
+    wait(!in_mode(TRANSMITTER)), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
     ack_timeout(timeout_), times_sent(0), ackNo(0)
 {
-    if (mode == TRANSMITTER)
+    if (in_mode(TRANSMITTER))
     {
         FILE *file = fopen(file_name, "rb");
 
@@ -237,7 +237,7 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
             + (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER) * numPacket;
         totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
     }
-    else if (mode_ == RECEIVER)
+    else if (in_mode(RECEIVER))
     {
         size = BYTES_ACK_CONTENT;
         if (!ext_data_ptr)
@@ -278,13 +278,17 @@ SendData::~SendData()
 void SendData::prepare_for_new_sending()
 {
     isNewPacket = true;
-    if (mode == RECEIVER)
+    if (in_mode(RECEIVER))
         bitIndex -= packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+}
+
+bool SendData::in_mode(Mode mode_) {
+    return mode & mode_;
 }
 
 void SendData::set_ack(const int dst, const int no, const bool last)
 {
-    if (mode == RECEIVER)
+    if (in_mode(RECEIVER))
     {
         data[INDEX_BYTE_DST] &= ~0xc;
         data[INDEX_BYTE_DST] |= (dst << OFFSET_DST);
@@ -314,7 +318,7 @@ sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
     int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
     int channels = NUM_CHANNELS;
     int srate = SAMPLE_RATE;
-    if (!path) path = mode == RECEIVER? "sendwaves_rx.wav" : "sendwaves_tx.wav";
+    if (!path) path = in_mode(RECEIVER)? "sendwaves_rx.wav" : "sendwaves_tx.wav";
     SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
     file.writeSync();
 
@@ -388,7 +392,7 @@ ReceiveData::~ReceiveData()
 
 void ReceiveData::prepare_for_new_packet()
 {
-    frameIndex += LEN_PREAMBLE - 20;
+    frameIndex += LEN_PREAMBLE - 80;
     packetFrameIndex = 0;
     status = DETECTING;
     in = false;
@@ -402,6 +406,10 @@ void ReceiveData::prepare_for_receiving()
     packetFrameIndex = 0;
     for (int i = 0; i < 5; ++i)
         memset(packet[i], 0, BYTES_CONTENT + BYTES_CRC + BYTES_INFO);
+}
+
+bool ReceiveData::in_mode(Mode mode_) {
+    return mode & mode_;
 }
 
 void ReceiveData::correct_threshold()
@@ -456,7 +464,7 @@ size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
         //file1 = SndfileHandle("diff2.wav", SFM_WRITE, format, channels, srate);
     //file1.writeSync();
     //file1.write(diff, frameIndex);
-    if (!path) path = mode == RECEIVER? "reveivewaves_rx.wav" : "reveivewaves_tx.wav";
+    if (!path) path = in_mode(RECEIVER)? "reveivewaves_rx.wav" : "reveivewaves_tx.wav";
     SndfileHandle file = SndfileHandle(path, SFM_WRITE, format, channels, srate);
     file.writeSync();
     return file.write(samples, frameIndex);
@@ -477,11 +485,12 @@ bool ReceiveData::demodulate()
             amplitude += abs(samples[frameIndex]);
             amplitude -= abs(samples[frameIndex - PERIOD]);
         }
-        if (status == RECEIVING && !in && mode == RECEIVER) {
+        if (status == RECEIVING && !in && in_mode(RECEIVER)) {
             if (first)
             {
                 printf("Start receiving!\n");
                 printf("Start from frame #%u\n", frameIndex);
+                printf("New packet from frame #%u\n", frameIndex);
                 startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
                 first = false;
             }
@@ -515,6 +524,7 @@ bool ReceiveData::demodulate()
             frameIndex++;
             if (getHeader)
             {
+                printf("New packet from frame #%u\n", frameIndex);
                 status = RECEIVING;
                 packetFrameIndex = 0;
             }
@@ -547,9 +557,9 @@ bool ReceiveData::demodulate()
                 bitsReceived += NUM_CARRIRER;
             }
             frameIndex++;
-            if ((mode == RECEIVER && (packetFrameIndex >= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
+            if ((in_mode(RECEIVER) && (packetFrameIndex >= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
                 bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))) ||
-                (mode == TRANSMITTER && packetFrameIndex >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO) / NUM_CARRIRER))
+                (in_mode(TRANSMITTER) && packetFrameIndex >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO) / NUM_CARRIRER))
             {
                 unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
                 unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
@@ -567,15 +577,15 @@ bool ReceiveData::demodulate()
                         break;
                     }
                 }
-                if (canAc || (mode == RECEIVER && !need_ack))
+                if (canAc || (in_mode(RECEIVER) && !need_ack))
                     memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC - BYTES_INFO);
-                else if (mode == RECEIVER)
+                else if (in_mode(RECEIVER))
                     bitsReceived -= bitsReceivedPacket;
-                if ((need_ack && mode == RECEIVER && canAc) || mode == TRANSMITTER) 
+                if ((need_ack && in_mode(RECEIVER) && canAc) || in_mode(TRANSMITTER))
                 {
                     *signal = true;
                 }
-                if (mode == RECEIVER && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))
+                if (in_mode(RECEIVER) && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))
                     return true;
                 else
                     prepare_for_new_packet();
