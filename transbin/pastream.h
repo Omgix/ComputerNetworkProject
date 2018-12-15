@@ -226,7 +226,7 @@ private:
 	inline void prepare_for_new_sending();
 	inline bool in_mode(Mode mode_);
 	void set_ack(const int dst, const int no, const bool last);
-	int receive_udp_msg(int n);
+	int receive_udp_msg();
 	friend class Stream;
 	friend class DataSim;
 public:
@@ -315,7 +315,8 @@ private:
 	friend class Stream;
 public:
 	explicit DataCo(Mode mode_, const char *send_file = nullptr, bool text = false, void *data_sent_ = nullptr,
-		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
+		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr,
+                    int dst_ = 0, in_addr_t ip_ = 0, uint16_t port_ = 0);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
 };

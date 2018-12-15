@@ -1,5 +1,6 @@
 ﻿#include "pastream.h"
 #include <cstdio>
+#include <arpa/inet.h>
 
 const char Wellcome[] =
 "===================================================================\n"
@@ -77,14 +78,16 @@ int main()
         else if (option == 3)
         {
             select_audiodev(stream, true, true, true);
-            DataCo data(TRANSMITTER, "INPUT.bin", false, data_sent, data_rec, samples_sent, samples_rec);
+            DataCo data(TRANSMITTER, "INPUT.bin", false, data_sent, data_rec, samples_sent, samples_rec,
+                    2, inet_addr("127.0.0.1"), 8888);
             stream.send(data, true, "wavesent1.wav", true, "wavereceived1.wav");
             printf("%s", Options);
         }
         else if (option == 4)
         {
             select_audiodev(stream, true, true, true);
-            DataCo data(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
+            DataCo data(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                    2, inet_addr("127.0.0.1"), 8888);
             stream.receive(data, true, "wavesent2.wav", true, "wavereceived2.wav");
             printf("%s", Options);
         }

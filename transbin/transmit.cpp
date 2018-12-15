@@ -1,4 +1,4 @@
-﻿#include "pastream.h"
+#include "pastream.h"
 #include <cstdio>
 #include <cstring>
 #include <cstdlib>
@@ -332,19 +332,19 @@ void SendData::set_ack(const int dst, const int no, const bool last)
     }
 }
 
-int SendData::receive_udp_msg(int n)
+int SendData::receive_udp_msg()
 {
-    int server_fd;
+    int server_fd, ret;
     struct sockaddr_in ser_addr;
     socklen_t len;
     ssize_t count;
     struct sockaddr_in client_addr;  //client_addr用于记录发送方的地址信息
-    const char *ipAddress = "192.168.1.1";
+    const char *ipAddress = "127.0.0.1";
 
     server_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(server_fd < 0)
     {
-        printf("create socket fail!\n");
+        printf("Create socket fail!\n");
         return -1;
     }
 
@@ -353,8 +353,15 @@ int SendData::receive_udp_msg(int n)
     ser_addr.sin_addr.s_addr = inet_addr(ipAddress);  //注意网络序转换
     ser_addr.sin_port = htons(SERVER_PORT);  //注意网络序转换
 
+    ret = bind(server_fd, (struct sockaddr*)&ser_addr, sizeof(ser_addr));
+    if(ret < 0)
+    {
+        printf("Socket bind failed!\n");
+        return -1;
+    }
+
     uint8_t *buf_rec = data;
-    const int BUFF_LEN = 128;
+    const size_t BUFF_LEN = 128;
     char buf_send [BUFF_LEN] = {};
 
     uint8_t info[BYTES_INFO] = {};
@@ -362,26 +369,39 @@ int SendData::receive_udp_msg(int n)
     info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
     info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
 
-    for(int i = 0; i < n; i++)
+    int i = 0;
+    while (true)
     {
-        memset(buf_rec, 0, BUFF_LEN);
+        bool finished = false;
+
         len = sizeof(client_addr);
         count = recvfrom(server_fd, buf_rec + BYTES_INFO, BUFF_LEN, 0, (struct sockaddr*)&client_addr, &len);
         if(count == -1)
         {
-            printf("recieve data fail!\n");
+            printf("Receive data failed!\n");
             return -1;
         }
+        size_t msg_len = strnlen((char*) (buf_rec + BYTES_INFO), BUFF_LEN);
+        sprintf(buf_send, "%zu bytes received.\n", msg_len);
+        sendto(server_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&client_addr, len);
 
-        info[INDEX_BYTE_SIZE] = 0x0;
-        info[INDEX_BYTE_SIZE] |= (count << (OFFSET_SIZE % 8));
-        info[INDEX_BYTE_NO] = 0x0;
-        info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
-        if (i == n - 1)
+        uint16_t port = client_addr.sin_port;
+        char ip [INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(client_addr.sin_addr), ip, INET_ADDRSTRLEN);
+
+        printf("Get packet #%d with %zu bytes from <%s,%d>, now transfer.\n", i, msg_len, ip, port);
+
+        if (strncmp((char*)(buf_rec + BYTES_INFO), "end flag\n", 12) == 0)
         {
             info[INDEX_BYTE_TYPEID] &= ~0xf0;
             info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
+            msg_len = 0;
+            finished = true;
         }
+        info[INDEX_BYTE_SIZE] = 0x0;
+        info[INDEX_BYTE_SIZE] |= (msg_len << (OFFSET_SIZE % 8));
+        info[INDEX_BYTE_NO] = 0x0;
+        info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
         set_ip(info, client_addr.sin_addr.s_addr);
         set_port(info, client_addr.sin_port);
 
@@ -391,10 +411,17 @@ int SendData::receive_udp_msg(int n)
         memcpy(info + BYTES_INFO - 1, &crc8, 1);
 
         memcpy(buf_rec, info, BYTES_INFO);
-        sendto(server_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&client_addr, len);  //发送信息给client，注意使用了client_addr结构体指针
-        buf_rec += BYTES_INFO + count;
-        totalBits += (BYTES_INFO + count) * 8;
+
+        crc_t crc = crc_init();
+        crc = crc_update(crc, buf_rec, msg_len + BYTES_INFO);
+        crc = crc_finalize(crc);
+        memcpy(buf_rec + BYTES_INFO + msg_len, &crc, BYTES_CRC);
+
+        buf_rec += BYTES_INFO + msg_len + BYTES_CRC;
+        totalBits += (BYTES_INFO + msg_len + BYTES_CRC) * 8;
         nextRecvNo++;
+        i++;
+        if (finished) break;
     }
 
     close(server_fd);
@@ -712,24 +739,37 @@ int ReceiveData::send_udp_msg()
     ser_addr.sin_family = AF_INET;
 
     uint8_t *buf_send = data;
-    const int BUFF_LEN = 128;
+    const size_t BUFF_LEN = 256;
     char buf_rec [BUFF_LEN] = {};
 
     while (true)
     {
         while (nextSendNo >= nextRecvNo) {}
         len = sizeof(ser_addr);
+        int no = get_no(buf_send);
         int msg_len = get_size(buf_send);
         ser_addr.sin_addr.s_addr = get_ip(buf_send);
         ser_addr.sin_port = get_port(buf_send);
 
-        sendto(client_fd, buf_send + BYTES_INFO, (size_t)msg_len, 0, (struct sockaddr*)&ser_addr, len);
+        uint16_t port = ser_addr.sin_port;
+        char ip [INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(ser_addr.sin_addr), ip, INET_ADDRSTRLEN);
+
+        printf("Get packet #%d with %d bytes, send it to <%s,%d>\n", no, msg_len, ip, port);
+
+        buf_send[BYTES_INFO + msg_len] = 0;
+        sendto(client_fd, buf_send + BYTES_INFO, msg_len + 1, 0, (struct sockaddr*)&ser_addr, len);
         memset(buf_rec, 0, BUFF_LEN);
         recvfrom(client_fd, buf_rec, BUFF_LEN, 0, (struct sockaddr*)&src, &len);  //接收来自server的信息
         if (get_typeID(buf_send) == TYPEID_CONTENT_LAST)
             break;
-        sleep(1);  //一秒发送一次消息
+        buf_send += msg_len + BYTES_INFO;
     }
+    sprintf((char*)buf_send, "end flag\n");
+    sendto(client_fd, buf_send, 12, 0, (struct sockaddr*)&ser_addr, len);
+    memset(buf_send, 0, BUFF_LEN);
+    recvfrom(client_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&src, &len);  //接收来自server的信息
+    printf("server: %s\n",buf_send);
 
     close(client_fd);
 
@@ -751,8 +791,6 @@ size_t ReceiveData::write_to_file(const char* path = nullptr)
     fclose(file);
     return n;
 }
-
-static int diff[MAX_TIME_RECORD * SAMPLE_RATE];
 
 size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
 {
@@ -782,9 +820,9 @@ bool ReceiveData::demodulate()
 }
 
 DataCo::DataCo(Mode mode_, const char *send_file, bool text, void *data_sent_,
-    void *data_rec_, SAMPLE *samples_sent_, SAMPLE *samples_rec_) :
+    void *data_rec_, SAMPLE *samples_sent_, SAMPLE *samples_rec_, int dst_, in_addr_t ip_, uint16_t port_) :
     signal(false), mode(mode_),
-    send_data(send_file, text, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal),
+    send_data(send_file, text, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal, dst_, ip_, port_),
     receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
 {
 }
@@ -1006,7 +1044,6 @@ int DataSim::receive_callback(const void *inputBuffer, void *outputBuffer,
                     sqr += receivedata.samples[receivedata.numSamplesReceived - j] 
                             * receivedata.samples[receivedata.numSamplesReceived - j];
                 square[receivedata.numSamplesReceived] = sqr;
-                diff[receivedata.numSamplesReceived] = receivedata.numSamplesReceived - data->totalFramesSent;
                 if (sqr > 0.25)
                     channel_free = true;
                 else

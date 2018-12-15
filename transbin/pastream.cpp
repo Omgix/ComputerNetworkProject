@@ -355,7 +355,7 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
     while ((err = Pa_IsStreamActive(input_stream)) == 1)
     {
         if (mode_ == I_TO_A)
-            data.send_data.receive_udp_msg(40);
+            data.send_data.receive_udp_msg();
         else if (mode_ == A_TO_I)
             data.receive_data.send_udp_msg();
     }
