@@ -141,13 +141,17 @@ public:
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void send_and_receive(DataSim &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
+	void transto(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
+                  bool write_rec_waves = false, const char* file_wave_rec = nullptr);
+    void transfrom(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
+                 bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 };
 
 enum Mode
 {
 	TRANSMITTER = 0x1,
-	RECEIVER = 0x0,
-	GATEWAY = 0x2
+	RECEIVER = 0x2,
+	GATEWAY = 0x4
 };
 
 class SendData
@@ -181,6 +185,7 @@ private:
 	bool isPreamble;                              // Indicate if we will send a preamble frame
 	bool isNewPacket;                             // Indicate if the next frame we will send is in a new packet
 	unsigned ackNo;
+	int dst;
     int src;
     int typeID;					 // Used in demodulation
     int noPacket;
@@ -236,6 +241,7 @@ private:
 	unsigned frameIndex;         // Used in demodulation thread (demodulate()) to indicate the index of frame that is being demodulated
 	unsigned startFrom;
 	int src;
+	int dst;
 	int typeID;					 // Used in demodulation
 	int noPacket;
 	int bytesPacket; // Used in demodulation

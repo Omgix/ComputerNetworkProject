@@ -32,7 +32,6 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
     (void)inputBuffer;
     (void)statusFlags;
 
-    data->time_info = timeInfo;
     /* Stage of signal before sending data. */
     if (data->status == SendData::status::SIGNAL)
     {
@@ -180,7 +179,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
 SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microseconds timeout_,
     bool need_ack_, Mode mode_, bool *ack_received_, int dst) :
     status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
-    bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? true : need_ack_),
+    bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? need_ack_: true),
     wait(!in_mode(TRANSMITTER)), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
     ack_timeout(timeout_), times_sent(0), ackNo(0)
 {
@@ -636,9 +635,10 @@ bool ReceiveData::demodulate()
 
             bool getHeader = correlate_next();
             frameIndex++;
-            if (getHeader && nextRecvNo != 0)
+            if (getHeader)
             {
-                printf("New packet from frame #%u\n", frameIndex);
+                if (nextRecvNo != 0 && in_mode(RECEIVER))
+                    printf("New packet from frame #%u\n", frameIndex);
                 status = RECEIVING;
                 packetFrameIndex = 0;
             }
@@ -694,18 +694,13 @@ bool ReceiveData::demodulate()
                     else
                         choice = 0;
                 }
-                int destination = get_dst(packet[choice]);
-                //if (destination != NODE)
-                //receivedata.prepare_for_new_packet(); // Check if the packet's dst is itself
+                dst = get_dst(packet[choice]);
                 src = get_src(packet[choice]);
                 typeID = get_typeID(packet[choice]);
                 bytesPacket = get_size(packet[choice]);
                 noPacket = get_no(packet[choice]);
-                if (in_mode(RECEIVER) && need_ack && noPacket != nextRecvNo)
-                {
-                    bitsReceived -= BITS_INFO;
-                    prepare_for_new_packet(); continue;
-                }
+                //printf("packet %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                       //noPacket, typeID, frameIndex, src, bytesPacket);
             }
             if (packetFrameIndex >= SAMPLES_PER_N_BIT * (BYTES_INFO + bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
             {
@@ -727,15 +722,26 @@ bool ReceiveData::demodulate()
                 }
                 if (canAc || (in_mode(RECEIVER) && !need_ack))
                 {
-                    memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
-                    nextRecvNo = noPacket + 1;
-                    totalBytes += bytesPacket;
+                    if (noPacket == nextRecvNo)
+                    {
+                        memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
+                        nextRecvNo = noPacket + 1;
+                        totalBytes += bytesPacket;
+                    }
+                    else
+                    {
+                        bitsReceived -= bitsReceivedPacket;
+                    }
                 }
                 else if (in_mode(RECEIVER))
+                {
                     bitsReceived -= bitsReceivedPacket;
+                    printf("Reject!!\n");
+                }
 
                 if ((need_ack && in_mode(RECEIVER) && canAc) || in_mode(TRANSMITTER))
                 {
+                    //printf("\nSignal ACK.\n");
                     *signal = true;
                 }
 
