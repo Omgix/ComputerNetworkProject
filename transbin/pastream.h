@@ -141,10 +141,10 @@ public:
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void send_and_receive(DataSim &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
-	void transto(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
+	/*void transto(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
                   bool write_rec_waves = false, const char* file_wave_rec = nullptr);
     void transfrom(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
-                 bool write_rec_waves = false, const char* file_wave_rec = nullptr);
+                 bool write_rec_waves = false, const char* file_wave_rec = nullptr);*/
 };
 
 enum Mode

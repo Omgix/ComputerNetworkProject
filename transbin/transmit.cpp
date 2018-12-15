@@ -409,7 +409,6 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
     (void)statusFlags;
     (void)userData;
 
-    unsigned long i;
     int finished;
     unsigned long framesCalc;
 
@@ -426,13 +425,184 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
 
     if (inputBuffer == nullptr)
     {
-        for (i = 0; i < framesCalc; i++)
+        for (unsigned long i = 0; i < framesCalc; i++)
             data->samples[data->numSamplesReceived++] = SAMPLE_SILENCE;
     }
     else
     {
-        for (i = 0; i < framesCalc; i++)
+        for (unsigned long k = 0; k < framesCalc; k++)
+        {
             data->samples[data->numSamplesReceived++] = (*rptr++) * CONSTANT_AMPLIFY;
+
+            unsigned &frameIndex = data->frameIndex;
+            frameIndex = data->numSamplesReceived - 1;
+            SAMPLE  &amplitude = data->amplitude;
+            SAMPLE *samples = data->samples;
+            unsigned &startFrom = data->startFrom;
+            unsigned &packetFrameIndex = data->packetFrameIndex;
+
+            if (frameIndex < PERIOD)
+            {
+                amplitude += abs(samples[frameIndex]);
+            }
+            else
+            {
+                amplitude += abs(samples[frameIndex]);
+                amplitude -= abs(samples[frameIndex - PERIOD]);
+            }
+            if (data->status == RECEIVING && !in && data->in_mode(RECEIVER)) {
+                if (first)
+                {
+                    printf("Start receiving!\n");
+                    printf("Start from frame #%u\n", frameIndex);
+                    printf("New packet from frame #%u\n", frameIndex);
+                    startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
+                    first = false;
+                }
+                in = true;
+            }
+            if (data->status == WAITING || data->status == ASSURING)
+            {
+                if (data->status == ASSURING)
+                    data->correct_threshold();
+                frameIndex++;
+                packetFrameIndex++;
+                if (data->status == WAITING && amplitude > THRESHOLD_SILENCE)
+                {
+                    data->status = ASSURING;
+                    packetFrameIndex = 0;
+                }
+                else if (data->status == ASSURING)
+                {
+                    if (packetFrameIndex > LEN_SIGNAL)
+                    {
+                        data->threshold *= CONSTANT_THRESHOLD;
+                        data->prepare_for_receiving();
+                    }
+                }
+            }
+            else if (data->status == DETECTING)
+            {
+                packetFrameIndex++;
+
+                bool getHeader = data->correlate_next();
+                frameIndex++;
+                if (getHeader)
+                {
+                    //if (data->nextRecvNo != 0 && data->in_mode(RECEIVER))
+                        //printf("New packet from frame #%u\n", frameIndex);
+                    data->status = RECEIVING;
+                    packetFrameIndex = 0;
+                }
+            }
+            else if (data->status == RECEIVING)
+            {
+                packetFrameIndex++;
+
+                if (packetFrameIndex % SAMPLES_PER_N_BIT == 0)
+                {
+                    int indexBytePacketSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - NUM_CARRIRER) / BITS_PER_BYTE;
+                    int offsetSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER -  NUM_CARRIRER) % BITS_PER_BYTE;
+                    //int indexBytePacketCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) / BITS_PER_BYTE;
+                    //int offsetCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) % BITS_PER_BYTE;
+                    for (int i = 0; i < 5; ++i)
+                    {
+                        float valueSin = 0.0f;
+                        //float valueCos = 0.0f;
+                        for (int j = SAMPLES_PER_N_BIT - 1; j >= 0; --j)
+                        {
+                            unsigned phase = (packetFrameIndex - 1 - j) % PERIOD;
+                            valueSin += samples[frameIndex - j - data->align[i]] * sine[phase];
+                            //valueCos += samples[frameIndex - j - align[i]] * cosine[phase];
+                        }
+                        if (valueSin > THRESHOLD_DEMODULATE)
+                            data->packet[i][indexBytePacketSin] = data->packet[i][indexBytePacketSin] | (1 << offsetSin);
+                        //if (valueCos > THRESHOLD_DEMODULATE)
+                        //packet[i][indexBytePacketCos] = packet[i][indexBytePacketCos] | (1 << offsetCos);
+                    }
+                    data->bitsReceived += NUM_CARRIRER;
+                }
+                frameIndex++;
+                if (packetFrameIndex == SAMPLES_PER_N_BIT * BITS_INFO / NUM_CARRIRER)
+                {
+                    int choice = -1;
+                    for (int i = 0; i < 5; ++i)
+                    {
+                        crc8_t crc8 = crc8_init();
+                        crc8 = crc8_update(crc8, data->packet[i], BYTES_INFO);
+                        crc8 = crc8_finalize(crc8);
+                        if (crc8 == 0x00) {
+                            choice = i;
+                            break;
+                        }
+                    }
+                    if (choice == -1)
+                    {
+                        if (data->need_ack)
+                        {
+                            data->bitsReceived -= BITS_INFO;
+                            data->prepare_for_new_packet(); continue;
+                        }
+                        else
+                            choice = 0;
+                    }
+                    data->dst = get_dst(data->packet[choice]);
+                    data->src = get_src(data->packet[choice]);
+                    data->typeID = get_typeID(data->packet[choice]);
+                    data->bytesPacket = get_size(data->packet[choice]);
+                    data->noPacket = get_no(data->packet[choice]);
+                    //printf("packet %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                    //noPacket, typeID, frameIndex, src, bytesPacket);
+                }
+                if (packetFrameIndex >= SAMPLES_PER_N_BIT * (BYTES_INFO + data->bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
+                {
+                    unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+                    unsigned indexByte = (data->bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
+                    uint8_t *wptr = data->data + indexByte;
+                    int choice = 0;
+                    bool canAc = false;
+                    for (int i = 0; i < 5; ++i)
+                    {
+                        crc_t crc = crc_init();
+                        crc = crc_update(crc, data->packet[i], bitsReceivedPacket / BITS_PER_BYTE);
+                        crc = crc_finalize(crc);
+                        if (crc == 0x48674bc7) {
+                            choice = i;
+                            canAc = true;
+                            break;
+                        }
+                    }
+                    if (canAc || (data->in_mode(RECEIVER) && !data->need_ack))
+                    {
+                        if (data->noPacket == data->nextRecvNo)
+                        {
+                            memcpy(wptr, data->packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
+                            data->nextRecvNo = data->noPacket + 1;
+                            data->totalBytes += data->bytesPacket;
+                        }
+                        else
+                        {
+                            data->bitsReceived -= bitsReceivedPacket;
+                        }
+                    }
+                    else if (data->in_mode(RECEIVER))
+                    {
+                        data->bitsReceived -= bitsReceivedPacket;
+                    }
+
+                    if ((data->need_ack && data->in_mode(RECEIVER) && canAc) || data->in_mode(TRANSMITTER))
+                    {
+                        //printf("\nSignal ACK.\n");
+                        *data->signal = true;
+                    }
+
+                    if (data->in_mode(RECEIVER) && data->typeID == TYPEID_CONTENT_LAST)
+                        return paComplete;
+                    else
+                        data->prepare_for_new_packet();
+                }
+            }
+        }
     }
     return finished;
 }
@@ -587,170 +757,7 @@ bool ReceiveData::demodulate()
 {
     while (frameIndex + 2 < numSamplesReceived)
     {
-        diff[frameIndex] = numSamplesReceived - frameIndex;
-        if (frameIndex == INITIAL_INDEX_RX)
-        {
-            for (int i = 0; i < PERIOD; ++i)
-                amplitude += abs(samples[frameIndex - i]);
-        }
-        else
-        {
-            amplitude += abs(samples[frameIndex]);
-            amplitude -= abs(samples[frameIndex - PERIOD]);
-        }
-        if (status == RECEIVING && !in && in_mode(RECEIVER)) {
-            if (first)
-            {
-                printf("Start receiving!\n");
-                printf("Start from frame #%u\n", frameIndex);
-                printf("New packet from frame #%u\n", frameIndex);
-                startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
-                first = false;
-            }
-            in = true;
-        }
-        if (status == WAITING || status == ASSURING)
-        {
-            if (status == ASSURING)
-                correct_threshold();
-            frameIndex++;
-            packetFrameIndex++;
-            if (status == WAITING && amplitude > THRESHOLD_SILENCE)
-            {
-                status = ASSURING;
-                packetFrameIndex = 0;
-            }
-            else if (status == ASSURING)
-            {
-                if (packetFrameIndex > LEN_SIGNAL)
-                {
-                    threshold *= CONSTANT_THRESHOLD;
-                    prepare_for_receiving();
-                }
-            }
-        }
-        else if (status == DETECTING)
-        {
-            packetFrameIndex++;
 
-            bool getHeader = correlate_next();
-            frameIndex++;
-            if (getHeader)
-            {
-                if (nextRecvNo != 0 && in_mode(RECEIVER))
-                    printf("New packet from frame #%u\n", frameIndex);
-                status = RECEIVING;
-                packetFrameIndex = 0;
-            }
-        }
-        else if (status == RECEIVING)
-        {
-            packetFrameIndex++;
-
-            if (packetFrameIndex % SAMPLES_PER_N_BIT == 0)
-            {
-                int indexBytePacketSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - NUM_CARRIRER) / BITS_PER_BYTE;
-                int offsetSin = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER -  NUM_CARRIRER) % BITS_PER_BYTE;
-                //int indexBytePacketCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) / BITS_PER_BYTE;
-                //int offsetCos = (packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER - 1) % BITS_PER_BYTE;
-                for (int i = 0; i < 5; ++i)
-                {
-                    float valueSin = 0.0f;
-                    //float valueCos = 0.0f;
-                    for (int j = SAMPLES_PER_N_BIT - 1; j >= 0; --j)
-                    {
-                        unsigned phase = (packetFrameIndex - 1 - j) % PERIOD;
-                        valueSin += samples[frameIndex - j - align[i]] * sine[phase];
-                        //valueCos += samples[frameIndex - j - align[i]] * cosine[phase];
-                    }
-                    if (valueSin > THRESHOLD_DEMODULATE)
-                        packet[i][indexBytePacketSin] = packet[i][indexBytePacketSin] | (1 << offsetSin);
-                    //if (valueCos > THRESHOLD_DEMODULATE)
-                        //packet[i][indexBytePacketCos] = packet[i][indexBytePacketCos] | (1 << offsetCos);
-                }
-                bitsReceived += NUM_CARRIRER;
-            }
-            frameIndex++;
-            if (packetFrameIndex == SAMPLES_PER_N_BIT * BITS_INFO / NUM_CARRIRER)
-            {
-                int choice = -1;
-                for (int i = 0; i < 5; ++i)
-                {
-                    crc8_t crc8 = crc8_init();
-                    crc8 = crc8_update(crc8, packet[i], BYTES_INFO);
-                    crc8 = crc8_finalize(crc8);
-                    if (crc8 == 0x00) {
-                        choice = i;
-                        break;
-                    }
-                }
-                if (choice == -1)
-                {
-                    if (need_ack)
-                    {
-                        bitsReceived -= BITS_INFO;
-                        prepare_for_new_packet(); continue;
-                    }
-                    else
-                        choice = 0;
-                }
-                dst = get_dst(packet[choice]);
-                src = get_src(packet[choice]);
-                typeID = get_typeID(packet[choice]);
-                bytesPacket = get_size(packet[choice]);
-                noPacket = get_no(packet[choice]);
-                //printf("packet %d: type: %d, index: %d, src: %d, bytes: %d\n",
-                       //noPacket, typeID, frameIndex, src, bytesPacket);
-            }
-            if (packetFrameIndex >= SAMPLES_PER_N_BIT * (BYTES_INFO + bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
-            {
-                unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
-                unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
-                uint8_t *wptr = data + indexByte;
-                int choice = 0;
-                bool canAc = false;
-                for (int i = 0; i < 5; ++i)
-                {
-                    crc_t crc = crc_init();
-                    crc = crc_update(crc, packet[i], bitsReceivedPacket / BITS_PER_BYTE);
-                    crc = crc_finalize(crc);
-                    if (crc == 0x48674bc7) {
-                        choice = i;
-                        canAc = true;
-                        break;
-                    }
-                }
-                if (canAc || (in_mode(RECEIVER) && !need_ack))
-                {
-                    if (noPacket == nextRecvNo)
-                    {
-                        memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
-                        nextRecvNo = noPacket + 1;
-                        totalBytes += bytesPacket;
-                    }
-                    else
-                    {
-                        bitsReceived -= bitsReceivedPacket;
-                    }
-                }
-                else if (in_mode(RECEIVER))
-                {
-                    bitsReceived -= bitsReceivedPacket;
-                    printf("Reject!!\n");
-                }
-
-                if ((need_ack && in_mode(RECEIVER) && canAc) || in_mode(TRANSMITTER))
-                {
-                    //printf("\nSignal ACK.\n");
-                    *signal = true;
-                }
-
-                if (in_mode(RECEIVER) && typeID == TYPEID_CONTENT_LAST)
-                    return true;
-                else
-                    prepare_for_new_packet();
-            }
-        }
     }
     return false;
 }

@@ -241,7 +241,6 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
     start_output_stream();
     while ((err = Pa_IsStreamActive(output_stream)) == 1)
     {
-        data.receive_data.demodulate();
         printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
     }
     if (err < 0) error();
@@ -277,11 +276,11 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
     Pa_Sleep(20);
     while ((err = Pa_IsStreamActive(input_stream)) == 1)
     {
-        bool finished = data.demodulate();
-        if (finished)
-            stop_input_stream();
+        printf("%d bytes received\r", data.totalBytes); fflush(stdout);
+        Pa_Sleep(100);
     }
     if (err < 0) error();
+    stop_input_stream();
     close_input_stream();
     printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
     printf("Threshold: %f\n", data.threshold);
@@ -306,14 +305,14 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
 
     while ((err = Pa_IsStreamActive(input_stream)) == 1)
     {
-        bool finished = data.receive_data.demodulate();
-        if (finished)
-            stop_input_stream();
+        printf("%d bytes received\r", data.receive_data.totalBytes); fflush(stdout);
+        Pa_Sleep(100);
     }
     if (err < 0) error();
     Pa_Sleep(500);
-    stop_output_stream();
+    stop_input_stream();
     close_input_stream();
+    stop_output_stream();
     close_output_stream();
     printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
     printf("Threshold: %f\n", data.receive_data.threshold);
