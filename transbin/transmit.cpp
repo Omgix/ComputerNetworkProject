@@ -84,11 +84,12 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
         {
             if (data->isNewPacket)
             {
-                if (data->wait)
+                if (data->wait ||
+                    (data->in_mode(GATEWAY) && data->in_mode(TRANSMITTER) && data->nextSendNo >= data->nextRecvNo))
                 {
                     *wptr++ = SAMPLE_SILENCE;
                     data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
-                    if (data->in_mode(TRANSMITTER))
+                    if (data->in_mode(TRANSMITTER) && data->wait)
                     {
                         if (std::chrono::system_clock::now() > data->time_send + data->ack_timeout) // Time out! Retransmit
                         {
@@ -104,13 +105,14 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                         {
                             data->times_sent = 0;
                             data->wait = false;
-                            if (data->bitIndex >= data->totalBits) // All data has been sent
+                            if (data->typeID == TYPEID_CONTENT_LAST) // All data has been sent
                                 return paComplete; // When reach there, wait is false;
                             if (data->ack_timeout == ACK_INIT_TIMEOUT)
                                 data->ack_timeout -= DURATION_SIGNAL;
+                            data->nextSendNo++;
                         }
                     }
-                    else if (data->in_mode(RECEIVER))
+                    else if (data->in_mode(RECEIVER)) // Prepare for sending ACK.
                     {
                         if (*data->signal)
                             data->wait = false;
@@ -176,12 +178,12 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
     }
 }
 
-SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microseconds timeout_,
-    bool need_ack_, Mode mode_, bool *ack_received_, int dst) :
+SendData::SendData(const char* file_name, bool text, void *data_, SAMPLE *samples_, microseconds timeout_,
+    bool need_ack_, Mode mode_, bool *ack_received_, int dst_, in_addr_t ip_, uint16_t port_) :
     status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
     bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? need_ack_: true),
-    wait(!in_mode(TRANSMITTER)), size(0), totalFrames(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
-    ack_timeout(timeout_), times_sent(0), ackNo(0)
+    wait(!in_mode(TRANSMITTER)), size(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
+    ack_timeout(timeout_), times_sent(0), ackNo(0), dst(dst_), ip(ip_), port(port_), nextSendNo(0), nextRecvNo(0)
 {
     if (in_mode(TRANSMITTER))
     {
@@ -191,6 +193,8 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
             info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
             info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
             info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
+            set_ip(info, ip);
+            set_port(info, port);
 
             FILE *file = fopen(file_name, "rb");
 
@@ -204,13 +208,16 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
             fseek(file, 0, SEEK_END);
             size = ftell(file);
             rewind(file);
+
             size_t numPacket = ceil((float)size / BYTES_CONTENT);
             if (!ext_data_ptr)
                 data = new uint8_t[size + numPacket * (BYTES_CRC + BYTES_INFO)];
             uint8_t *ptr = data;
             unsigned remain = size;
+            int i = 0;
+            size_t len = 0;
 
-            for (int i = 0; i < numPacket; ++i)
+            while (remain > 0)
             {
                 unsigned numRead = remain < BYTES_CONTENT ? remain : BYTES_CONTENT;
 
@@ -218,7 +225,7 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
                 info[INDEX_BYTE_SIZE] |= (numRead << (OFFSET_SIZE % 8));
                 info[INDEX_BYTE_NO] = 0x0;
                 info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
-                if (i == numPacket - 1)
+                if (numRead == remain)
                 {
                     info[INDEX_BYTE_TYPEID] &= ~0xf0;
                     info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
@@ -230,7 +237,7 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
 
                 memcpy(ptr, info, BYTES_INFO);
                 ptr += BYTES_INFO;
-                fread(ptr, 1, numRead, file);
+                numRead = fread(ptr, 1, numRead, file);
                 ptr -= BYTES_INFO;
                 remain -= numRead;
                 crc_t crc = crc_init();
@@ -239,10 +246,9 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
                 ptr += numRead + BYTES_INFO;
                 memcpy(ptr, &crc, BYTES_CRC);
                 ptr += BYTES_CRC;
+                i++;
             }
             fclose(file);
-            totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
-                          + (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER) * numPacket;
             totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
         }
         else
@@ -262,6 +268,8 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
         data[INDEX_BYTE_TYPEID] |= (TYPEID_ACK << OFFSET_TYPEID);
         data[INDEX_BYTE_SIZE] = 0x0;
         data[INDEX_BYTE_SIZE] |= (BYTES_ACK_CONTENT << (OFFSET_SIZE % 8));
+        set_ip(data, ip);
+        set_port(data, port);
 
         crc8_t crc8 = crc8_init();
         crc8 = crc8_update(crc8, data, BYTES_INFO - 1);
@@ -272,12 +280,10 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
         crc = crc_update(crc, data, BYTES_ACK_CONTENT + BYTES_INFO);
         crc = crc_finalize(crc);
         memcpy(data + BYTES_ACK_CONTENT + BYTES_INFO, &crc, BYTES_CRC);
-        totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
-            + (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER);
         totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO);
     }
     if (!ext_sample_ptr)
-        samples = new SAMPLE[totalFrames];
+        samples = new SAMPLE[10000];
 }
 
 SendData::~SendData()
@@ -353,7 +359,7 @@ int SendData::receive_udp_msg(int n)
 
     uint8_t info[BYTES_INFO] = {};
     info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
-    info[INDEX_BYTE_DST] |= (1 << (OFFSET_DST % 8));
+    info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
     info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
 
     for(int i = 0; i < n; i++)
@@ -371,11 +377,24 @@ int SendData::receive_udp_msg(int n)
         info[INDEX_BYTE_SIZE] |= (count << (OFFSET_SIZE % 8));
         info[INDEX_BYTE_NO] = 0x0;
         info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
+        if (i == n - 1)
+        {
+            info[INDEX_BYTE_TYPEID] &= ~0xf0;
+            info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
+        }
+        set_ip(info, client_addr.sin_addr.s_addr);
+        set_port(info, client_addr.sin_port);
+
+        crc8_t crc8 = crc8_init();
+        crc8 = crc8_update(crc8, info, BYTES_INFO - 1);
+        crc8 = crc8_finalize(crc8);
+        memcpy(info + BYTES_INFO - 1, &crc8, 1);
 
         memcpy(buf_rec, info, BYTES_INFO);
         sendto(server_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&client_addr, len);  //发送信息给client，注意使用了client_addr结构体指针
         buf_rec += BYTES_INFO + count;
-        totalBits += (BYTES_INFO + count) << 3;
+        totalBits += (BYTES_INFO + count) * 8;
+        nextRecvNo++;
     }
 
     close(server_fd);
@@ -576,7 +595,10 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     {
                         if (data->noPacket == data->nextRecvNo)
                         {
-                            memcpy(wptr, data->packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
+                            if (!data->in_mode(GATEWAY))
+                                memcpy(wptr, data->packet[choice] + BYTES_INFO, data->bytesPacket);
+                            else
+                                memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
                             data->nextRecvNo = data->noPacket + 1;
                             data->totalBytes += data->bytesPacket;
                         }
@@ -612,10 +634,10 @@ ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_,
     status(WAITING), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr),
     data(data_ == nullptr ? new uint8_t[max_time * SAMPLE_RATE / SAMPLES_PER_N_BIT * NUM_CARRIRER] : (uint8_t *)data_),
     samples(samples_ == nullptr ? new SAMPLE[max_time*SAMPLE_RATE] : samples_), noPacket(-1),
-    packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]), nextRecvNo(0),
+    packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]), nextRecvNo(0), nextSendNo(0),
     bitsReceived(0), numSamplesReceived(0), maxNumFrames(max_time * SAMPLE_RATE), totalBytes(0),
     frameIndex(INITIAL_INDEX_RX), startFrom(0), mode(mode_), signal(ack_received_),
-    need_ack(mode_ == TRANSMITTER ? true : need_ack_), typeID(TYPEID_NONE), src(-1), bytesPacket(-1)
+    need_ack(in_mode(TRANSMITTER) ? true : need_ack_), typeID(TYPEID_NONE), src(-1), bytesPacket(-1)
 {
     for (int i = 0; i < 5; ++i)
         packet[i] = new uint8_t[BYTES_CONTENT + BYTES_CRC + BYTES_INFO];
@@ -672,13 +694,12 @@ bool ReceiveData::correlate_next()
     return abs(cur) >= threshold;
 }
 
-int ReceiveData::send_udp_msg(int n)
+int ReceiveData::send_udp_msg()
 {
     int client_fd;
     struct sockaddr_in ser_addr;
     socklen_t len;
     struct sockaddr_in src;
-    const char *ipAddress = "192.168.1.1";
 
     client_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(client_fd < 0)
@@ -689,26 +710,24 @@ int ReceiveData::send_udp_msg(int n)
 
     memset(&ser_addr, 0, sizeof(ser_addr));
     ser_addr.sin_family = AF_INET;
-    ser_addr.sin_addr.s_addr = inet_addr(ipAddress);  //注意网络序转换
-    ser_addr.sin_port = htons(SERVER_PORT);  //注意网络序转换
 
     uint8_t *buf_send = data;
     const int BUFF_LEN = 128;
     char buf_rec [BUFF_LEN] = {};
 
-    uint8_t info[BYTES_INFO] = {};
-    info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
-    info[INDEX_BYTE_DST] |= (1 << (OFFSET_DST % 8));
-    info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
-
-    for(int i = 0; i < n; i++)
+    while (true)
     {
-        while (i + 1 != nextRecvNo) {}
+        while (nextSendNo >= nextRecvNo) {}
         len = sizeof(ser_addr);
         int msg_len = get_size(buf_send);
+        ser_addr.sin_addr.s_addr = get_ip(buf_send);
+        ser_addr.sin_port = get_port(buf_send);
+
         sendto(client_fd, buf_send + BYTES_INFO, (size_t)msg_len, 0, (struct sockaddr*)&ser_addr, len);
         memset(buf_rec, 0, BUFF_LEN);
         recvfrom(client_fd, buf_rec, BUFF_LEN, 0, (struct sockaddr*)&src, &len);  //接收来自server的信息
+        if (get_typeID(buf_send) == TYPEID_CONTENT_LAST)
+            break;
         sleep(1);  //一秒发送一次消息
     }
 
@@ -762,10 +781,10 @@ bool ReceiveData::demodulate()
     return false;
 }
 
-DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_,
+DataCo::DataCo(Mode mode_, const char *send_file, bool text, void *data_sent_,
     void *data_rec_, SAMPLE *samples_sent_, SAMPLE *samples_rec_) :
     signal(false), mode(mode_),
-    send_data(send_file, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal),
+    send_data(send_file, text, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal),
     receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
 {
 }
@@ -773,8 +792,8 @@ DataCo::DataCo(Mode mode_, const char *send_file, void *data_sent_,
 DataSim::DataSim(const int dst_, const char *send_file, void *data_sent_, void *data_rec_,
                 SAMPLE *samples_sent_, SAMPLE *samples_rec_) : 
     backoff_start(), backoff_time(100000), max_backoff_const(1), status(PENDDING),
-    senddata(send_file, data_sent_, samples_sent_, ACK_JAMMING_TIMEOUT, true, TRANSMITTER, nullptr, dst_),
-    ack(nullptr, nullptr, nullptr, ACK_JAMMING_TIMEOUT, true, RECEIVER, nullptr, dst_), totalFramesSent(0),
+    senddata(send_file, false, data_sent_, samples_sent_, ACK_JAMMING_TIMEOUT, true, TRANSMITTER, nullptr, dst_),
+    ack(nullptr, false, nullptr, nullptr, ACK_JAMMING_TIMEOUT, true, RECEIVER, nullptr, dst_), totalFramesSent(0),
     receivedata(MAX_TIME_RECORD_SIMUL, data_rec_, samples_rec_, true, RECEIVER, nullptr), channel_free(false),
     send_started(false), dst(dst_), indexPacketSending(0), indexPacketReceiving(0), ack_queue(), data_sending(nullptr),
     send_finished(false), receive_finished(false)

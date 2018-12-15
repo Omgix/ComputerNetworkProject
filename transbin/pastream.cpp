@@ -332,6 +332,54 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
     }
 }
 
+void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *file_wave_sent,
+                      bool write_rec_waves, const char *file_wave_rec)
+{
+    Mode direct;
+    if (mode_ == I_TO_A)
+        direct = TRANSMITTER;
+    else if (mode_ == A_TO_I)
+        direct = RECEIVER;
+    else
+        direct = TRANSMITTER;
+
+    DataCo data ((Mode)(direct | GATEWAY), nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
+
+    open_output_stream(&data.send_data, SendData::sendCallback);
+    open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
+    start_output_stream();
+    start_input_stream();
+
+    printf("Waiting for transferring to finish.\n");
+
+    while ((err = Pa_IsStreamActive(input_stream)) == 1)
+    {
+        if (mode_ == I_TO_A)
+            data.send_data.receive_udp_msg(40);
+        else if (mode_ == A_TO_I)
+            data.receive_data.send_udp_msg();
+    }
+    if (err < 0) error();
+    Pa_Sleep(500);
+    stop_input_stream();
+    close_input_stream();
+    stop_output_stream();
+    close_output_stream();
+    printf("\n#### Transferring is finished!! ####\n");
+    if (write_rec_waves)
+    {
+        printf("**You choose get waves received, now writing\n");
+        size_t n = data.receive_data.write_samples_to_file(file_wave_rec);
+        printf("**Writing samples recorded is finished, %zu samples have been write to in total.\n", n);
+    }
+    if (write_sent_waves)
+    {
+        printf("**You choose get waves sent, now writing\n");
+        size_t n = data.send_data.write_samples_to_file(file_wave_sent);
+        printf("**Writing waves sent is finished, %zu samples have been write to in total.\n", n);
+    }
+}
+
 void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* file_wave_sent,
                             bool write_rec_waves, const char* file_wave_rec)
 {
