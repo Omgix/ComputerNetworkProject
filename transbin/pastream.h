@@ -21,6 +21,8 @@ class DataSim;
 typedef std::chrono::time_point<std::chrono::system_clock> timepoint;
 typedef std::chrono::microseconds microseconds;
 
+#define SERVER_PORT 8888
+
 const int SAMPLE_RATE = 44100;          // SAMPLE_RATE frames in a second
 const int NUM_CHANNELS = 1;             // Mono channel will be used
 const int FRAMES_PER_BUFFER = 512;      // Size of the buffer
@@ -80,7 +82,25 @@ const int TYPEID_ACK_LAST = 5;
 const int TYPEID_NONE = 0xf;
 extern int NODE;
 
-extern float square[MAX_TIME_RECORD * SAMPLE_RATE];
+inline int get_typeID (const uint8_t* packet) {
+    return (packet[INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
+}
+
+inline int get_size (const uint8_t* packet) {
+    return (packet[INDEX_BYTE_SIZE] >> (OFFSET_SIZE % 8)) & 0xff;
+}
+
+inline int get_no (const uint8_t* packet) {
+    return (packet[INDEX_BYTE_NO] >> (OFFSET_NO % 8)) & 0xff;
+}
+
+inline int get_src (const uint8_t* packet) {
+    return (packet[INDEX_BYTE_SRC] >> (OFFSET_SRC % 8)) & 0x3;
+}
+
+inline int get_dst (const uint8_t* packet) {
+    return (packet[INDEX_BYTE_DST] >> (OFFSET_DST % 8)) & 0x3;
+}
 
 class Stream
 {
@@ -135,6 +155,7 @@ class SendData
 private:
 	enum status
 	{
+	    PENDING,
 		SIGNAL,                                   // Status of sending the single preamble and silence interval
 		CONTENT                                   // Status of sending the content
 	};
@@ -160,13 +181,19 @@ private:
 	bool isPreamble;                              // Indicate if we will send a preamble frame
 	bool isNewPacket;                             // Indicate if the next frame we will send is in a new packet
 	unsigned ackNo;
+    int src;
+    int typeID;					 // Used in demodulation
+    int noPacket;
+    int bytesPacket; // Used in demodulation
+    int nextRecvNo;
 	inline void prepare_for_new_sending();
 	inline bool in_mode(Mode mode_);
 	void set_ack(const int dst, const int no, const bool last);
+	int receive_udp_msg(int n);
 	friend class Stream;
 	friend class DataSim;
 public:
-	explicit SendData(const char* file_name, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
+	explicit SendData(const char* file_name = nullptr, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
 	        microseconds timeout_ = microseconds(2000000), bool need_ack_ = false,
 	        Mode mode_ = TRANSMITTER, bool *ack_received_ = nullptr, int dst = 0);
 	~SendData();
@@ -211,13 +238,16 @@ private:
 	int src;
 	int typeID;					 // Used in demodulation
 	int noPacket;
-	int bytesPacketContent; // Used in demodulation
+	int bytesPacket; // Used in demodulation
+	int nextRecvNo;
+	unsigned totalBytes;
 	inline void prepare_for_new_packet();
 	inline void prepare_for_receiving();
     inline bool in_mode(Mode mode_);
 	//void writeThreshold();                  // Write the convolution value in each frames to a WAV file
 	void correct_threshold();               // Adjusting convolution threshold in status ASSURING
 	bool correlate_next();                  // Calculate the convolution
+    int send_udp_msg(int n);
 	bool demodulate();                      // Demodulate received frames
 	friend class Stream;
 	friend class DataSim;

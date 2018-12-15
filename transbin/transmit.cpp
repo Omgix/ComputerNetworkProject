@@ -6,6 +6,11 @@
 #include "crc.h"
 #include <random>
 #include "crc-8.h"
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <zconf.h>
+#include <arpa/inet.h>
 
 bool in = false;
 bool first = true;
@@ -113,6 +118,10 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                     }
                     continue;
                 }
+                data->src = get_src(data->data + data->bitIndex / 8);
+                data->typeID = get_typeID(data->data + data->bitIndex / 8);
+                data->bytesPacket = get_size(data->data + data->bitIndex / 8);
+                data->noPacket = get_no(data->data + data->bitIndex / 8);
                 data->isNewPacket = false;
                 data->isPreamble = true;
                 index = 0;
@@ -148,9 +157,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 *wptr++ = frame;
                 if (index % SAMPLES_PER_N_BIT == 0)
                     data->bitIndex += NUM_CARRIRER;
-                if ((data->in_mode(TRANSMITTER) && (index>= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
-                    data->bitIndex >= data->totalBits)) ||
-                    (data->in_mode(RECEIVER) && index >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_INFO + BITS_CRC) / NUM_CARRIRER))
+                if (index>= SAMPLES_PER_N_BIT * (data->bytesPacket + BYTES_INFO + BYTES_CRC) * 8 / NUM_CARRIRER)
                 {
                     data->prepare_for_new_sending(); // Reset several index after sending a packet
                     if (data->need_ack || data->in_mode(RECEIVER))
@@ -159,7 +166,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                         data->wait = true;
                         *data->signal = false;
                     }
-                    if (data->in_mode(TRANSMITTER) && data->bitIndex >= data->totalBits && !data->need_ack)
+                    if (data->in_mode(TRANSMITTER) && data->typeID == TYPEID_CONTENT_LAST && !data->need_ack)
                         return paComplete;
                 }
 
@@ -179,63 +186,70 @@ SendData::SendData(const char* file_name, void *data_, SAMPLE *samples_, microse
 {
     if (in_mode(TRANSMITTER))
     {
-        FILE *file = fopen(file_name, "rb");
-
-        if (!file)
+        if (!in_mode(GATEWAY))
         {
-            fputs("Invalid file that will be sent!\n", stderr);
-            system("pause");
-            exit(-1);
-        }
+            uint8_t info[BYTES_INFO] = {};
+            info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
+            info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
+            info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
 
-        fseek(file, 0, SEEK_END);
-        size = ftell(file);
-        rewind(file);
-        size_t numPacket = ceil((float)size / BYTES_CONTENT);
-        if (!ext_data_ptr)
-            data = new uint8_t[size + numPacket * (BYTES_CRC + BYTES_INFO)];
-        uint8_t *ptr = data;
-        unsigned remain = size;
+            FILE *file = fopen(file_name, "rb");
 
-        uint8_t info[BYTES_INFO] = {};
-        info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
-        info[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
-        info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
-
-        for (int i = 0; i < numPacket; ++i)
-        {
-            unsigned numRead = remain < BYTES_CONTENT ? remain : BYTES_CONTENT;
-            
-            info[INDEX_BYTE_SIZE] = 0x0;
-            info[INDEX_BYTE_SIZE] |= (numRead << (OFFSET_SIZE % 8));
-            info[INDEX_BYTE_NO] = 0x0;
-            info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
-            if (i == numPacket - 1)
+            if (!file)
             {
-                info[INDEX_BYTE_TYPEID] &= ~0xf0;
-                info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
+                fputs("Invalid file that will be sent!\n", stderr);
+                system("pause");
+                exit(-1);
             }
-            crc8_t crc8 = crc8_init();
-            crc8 = crc8_update(crc8, info, BYTES_INFO - 1);
-            crc8 = crc8_finalize(crc8);
-            memcpy(info + BYTES_INFO - 1, &crc8, 1);
 
-            memcpy(ptr, info, BYTES_INFO);
-            ptr += BYTES_INFO;
-            fread(ptr, 1, numRead, file);
-            ptr -= BYTES_INFO;
-            remain -= numRead;
-            crc_t crc = crc_init();
-            crc = crc_update(crc, ptr, numRead + BYTES_INFO);
-            crc = crc_finalize(crc);
-            ptr += numRead + BYTES_INFO;
-            memcpy(ptr, &crc, BYTES_CRC);
-            ptr += BYTES_CRC;
+            fseek(file, 0, SEEK_END);
+            size = ftell(file);
+            rewind(file);
+            size_t numPacket = ceil((float)size / BYTES_CONTENT);
+            if (!ext_data_ptr)
+                data = new uint8_t[size + numPacket * (BYTES_CRC + BYTES_INFO)];
+            uint8_t *ptr = data;
+            unsigned remain = size;
+
+            for (int i = 0; i < numPacket; ++i)
+            {
+                unsigned numRead = remain < BYTES_CONTENT ? remain : BYTES_CONTENT;
+
+                info[INDEX_BYTE_SIZE] = 0x0;
+                info[INDEX_BYTE_SIZE] |= (numRead << (OFFSET_SIZE % 8));
+                info[INDEX_BYTE_NO] = 0x0;
+                info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
+                if (i == numPacket - 1)
+                {
+                    info[INDEX_BYTE_TYPEID] &= ~0xf0;
+                    info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
+                }
+                crc8_t crc8 = crc8_init();
+                crc8 = crc8_update(crc8, info, BYTES_INFO - 1);
+                crc8 = crc8_finalize(crc8);
+                memcpy(info + BYTES_INFO - 1, &crc8, 1);
+
+                memcpy(ptr, info, BYTES_INFO);
+                ptr += BYTES_INFO;
+                fread(ptr, 1, numRead, file);
+                ptr -= BYTES_INFO;
+                remain -= numRead;
+                crc_t crc = crc_init();
+                crc = crc_update(crc, ptr, numRead + BYTES_INFO);
+                crc = crc_finalize(crc);
+                ptr += numRead + BYTES_INFO;
+                memcpy(ptr, &crc, BYTES_CRC);
+                ptr += BYTES_CRC;
+            }
+            fclose(file);
+            totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
+                          + (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER) * numPacket;
+            totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
         }
-        fclose(file);
-        totalFrames = size * BITS_PER_BYTE * SAMPLES_PER_N_BIT / NUM_CARRIRER + LEN_SIGNAL
-            + (LEN_PREAMBLE + (BITS_CRC + BITS_INFO) * SAMPLES_PER_N_BIT / NUM_CARRIRER) * numPacket;
-        totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
+        else
+        {
+            status = PENDING;
+        }
     }
     else if (in_mode(RECEIVER))
     {
@@ -313,6 +327,63 @@ void SendData::set_ack(const int dst, const int no, const bool last)
     }
 }
 
+int SendData::receive_udp_msg(int n)
+{
+    int server_fd;
+    struct sockaddr_in ser_addr;
+    socklen_t len;
+    ssize_t count;
+    struct sockaddr_in client_addr;  //client_addr用于记录发送方的地址信息
+    const char *ipAddress = "192.168.1.1";
+
+    server_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(server_fd < 0)
+    {
+        printf("create socket fail!\n");
+        return -1;
+    }
+
+    memset(&ser_addr, 0, sizeof(ser_addr));
+    ser_addr.sin_family = AF_INET;
+    ser_addr.sin_addr.s_addr = inet_addr(ipAddress);  //注意网络序转换
+    ser_addr.sin_port = htons(SERVER_PORT);  //注意网络序转换
+
+    uint8_t *buf_rec = data;
+    const int BUFF_LEN = 128;
+    char buf_send [BUFF_LEN] = {};
+
+    uint8_t info[BYTES_INFO] = {};
+    info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
+    info[INDEX_BYTE_DST] |= (1 << (OFFSET_DST % 8));
+    info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
+
+    for(int i = 0; i < n; i++)
+    {
+        memset(buf_rec, 0, BUFF_LEN);
+        len = sizeof(client_addr);
+        count = recvfrom(server_fd, buf_rec + BYTES_INFO, BUFF_LEN, 0, (struct sockaddr*)&client_addr, &len);
+        if(count == -1)
+        {
+            printf("recieve data fail!\n");
+            return -1;
+        }
+
+        info[INDEX_BYTE_SIZE] = 0x0;
+        info[INDEX_BYTE_SIZE] |= (count << (OFFSET_SIZE % 8));
+        info[INDEX_BYTE_NO] = 0x0;
+        info[INDEX_BYTE_NO] |= (i << (OFFSET_NO % 8));
+
+        memcpy(buf_rec, info, BYTES_INFO);
+        sendto(server_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&client_addr, len);  //发送信息给client，注意使用了client_addr结构体指针
+        buf_rec += BYTES_INFO + count;
+        totalBits += (BYTES_INFO + count) << 3;
+    }
+
+    close(server_fd);
+
+    return 0;
+}
+
 sf_count_t SendData::write_samples_to_file(const char *path = nullptr)
 {
     int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
@@ -372,10 +443,10 @@ ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_,
     status(WAITING), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr),
     data(data_ == nullptr ? new uint8_t[max_time * SAMPLE_RATE / SAMPLES_PER_N_BIT * NUM_CARRIRER] : (uint8_t *)data_),
     samples(samples_ == nullptr ? new SAMPLE[max_time*SAMPLE_RATE] : samples_), noPacket(-1),
-    packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]),
-    bitsReceived(0), numSamplesReceived(0), maxNumFrames(max_time * SAMPLE_RATE),
+    packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]), nextRecvNo(0),
+    bitsReceived(0), numSamplesReceived(0), maxNumFrames(max_time * SAMPLE_RATE), totalBytes(0),
     frameIndex(INITIAL_INDEX_RX), startFrom(0), mode(mode_), signal(ack_received_),
-    need_ack(mode_ == TRANSMITTER ? true : need_ack_), typeID(TYPEID_NONE), src(-1), bytesPacketContent(-1)
+    need_ack(mode_ == TRANSMITTER ? true : need_ack_), typeID(TYPEID_NONE), src(-1), bytesPacket(-1)
 {
     for (int i = 0; i < 5; ++i)
         packet[i] = new uint8_t[BYTES_CONTENT + BYTES_CRC + BYTES_INFO];
@@ -432,6 +503,51 @@ bool ReceiveData::correlate_next()
     return abs(cur) >= threshold;
 }
 
+int ReceiveData::send_udp_msg(int n)
+{
+    int client_fd;
+    struct sockaddr_in ser_addr;
+    socklen_t len;
+    struct sockaddr_in src;
+    const char *ipAddress = "192.168.1.1";
+
+    client_fd = socket(AF_INET, SOCK_DGRAM, 0);
+    if(client_fd < 0)
+    {
+        printf("Create socket fail!\n");
+        return -1;
+    }
+
+    memset(&ser_addr, 0, sizeof(ser_addr));
+    ser_addr.sin_family = AF_INET;
+    ser_addr.sin_addr.s_addr = inet_addr(ipAddress);  //注意网络序转换
+    ser_addr.sin_port = htons(SERVER_PORT);  //注意网络序转换
+
+    uint8_t *buf_send = data;
+    const int BUFF_LEN = 128;
+    char buf_rec [BUFF_LEN] = {};
+
+    uint8_t info[BYTES_INFO] = {};
+    info[INDEX_BYTE_SRC] |= (NODE << (OFFSET_SRC % 8));
+    info[INDEX_BYTE_DST] |= (1 << (OFFSET_DST % 8));
+    info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_NORMAL << (OFFSET_TYPEID % 8));
+
+    for(int i = 0; i < n; i++)
+    {
+        while (i + 1 != nextRecvNo) {}
+        len = sizeof(ser_addr);
+        int msg_len = get_size(buf_send);
+        sendto(client_fd, buf_send + BYTES_INFO, (size_t)msg_len, 0, (struct sockaddr*)&ser_addr, len);
+        memset(buf_rec, 0, BUFF_LEN);
+        recvfrom(client_fd, buf_rec, BUFF_LEN, 0, (struct sockaddr*)&src, &len);  //接收来自server的信息
+        sleep(1);  //一秒发送一次消息
+    }
+
+    close(client_fd);
+
+    return 0;
+}
+
 size_t ReceiveData::write_to_file(const char* path = nullptr)
 {
     unsigned n = 0;
@@ -440,12 +556,10 @@ size_t ReceiveData::write_to_file(const char* path = nullptr)
 
     if (!file)
     {
-        fputs("Invalid file!\n", stderr);
+        fprintf(stderr, "Invalid file!\n");
         exit(-1);
     }
-    unsigned num_bytes = (bitsReceived -
-            ceil((float)bitsReceived / BITS_NORMALPACKET) * (BITS_CRC + BITS_INFO)) / BITS_PER_BYTE;
-    n = fwrite(data, sizeof(uint8_t), num_bytes, file);
+    n = fwrite(data, sizeof(uint8_t), totalBytes, file);
     fclose(file);
     return n;
 }
@@ -522,7 +636,7 @@ bool ReceiveData::demodulate()
 
             bool getHeader = correlate_next();
             frameIndex++;
-            if (getHeader)
+            if (getHeader && nextRecvNo != 0)
             {
                 printf("New packet from frame #%u\n", frameIndex);
                 status = RECEIVING;
@@ -557,9 +671,43 @@ bool ReceiveData::demodulate()
                 bitsReceived += NUM_CARRIRER;
             }
             frameIndex++;
-            if ((in_mode(RECEIVER) && (packetFrameIndex >= SAMPLES_PER_N_BIT * BITS_NORMALPACKET / NUM_CARRIRER ||
-                bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))) ||
-                (in_mode(TRANSMITTER) && packetFrameIndex >= SAMPLES_PER_N_BIT * (BITS_ACK_CONTENT + BITS_CRC + BITS_INFO) / NUM_CARRIRER))
+            if (packetFrameIndex == SAMPLES_PER_N_BIT * BITS_INFO / NUM_CARRIRER)
+            {
+                int choice = -1;
+                for (int i = 0; i < 5; ++i)
+                {
+                    crc8_t crc8 = crc8_init();
+                    crc8 = crc8_update(crc8, packet[i], BYTES_INFO);
+                    crc8 = crc8_finalize(crc8);
+                    if (crc8 == 0x00) {
+                        choice = i;
+                        break;
+                    }
+                }
+                if (choice == -1)
+                {
+                    if (need_ack)
+                    {
+                        bitsReceived -= BITS_INFO;
+                        prepare_for_new_packet(); continue;
+                    }
+                    else
+                        choice = 0;
+                }
+                int destination = get_dst(packet[choice]);
+                //if (destination != NODE)
+                //receivedata.prepare_for_new_packet(); // Check if the packet's dst is itself
+                src = get_src(packet[choice]);
+                typeID = get_typeID(packet[choice]);
+                bytesPacket = get_size(packet[choice]);
+                noPacket = get_no(packet[choice]);
+                if (in_mode(RECEIVER) && need_ack && noPacket != nextRecvNo)
+                {
+                    bitsReceived -= BITS_INFO;
+                    prepare_for_new_packet(); continue;
+                }
+            }
+            if (packetFrameIndex >= SAMPLES_PER_N_BIT * (BYTES_INFO + bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
             {
                 unsigned bitsReceivedPacket = packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
                 unsigned indexByte = (bitsReceived - bitsReceivedPacket) / BITS_NORMALPACKET * BYTES_CONTENT;
@@ -578,14 +726,20 @@ bool ReceiveData::demodulate()
                     }
                 }
                 if (canAc || (in_mode(RECEIVER) && !need_ack))
-                    memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / BITS_PER_BYTE - BYTES_CRC - BYTES_INFO);
+                {
+                    memcpy(wptr, packet[choice] + BYTES_INFO, bitsReceivedPacket / 8 - BYTES_CRC - BYTES_INFO);
+                    nextRecvNo = noPacket + 1;
+                    totalBytes += bytesPacket;
+                }
                 else if (in_mode(RECEIVER))
                     bitsReceived -= bitsReceivedPacket;
+
                 if ((need_ack && in_mode(RECEIVER) && canAc) || in_mode(TRANSMITTER))
                 {
                     *signal = true;
                 }
-                if (in_mode(RECEIVER) && bitsReceived == 50000 + ceil((float)50000 / BITS_CONTENT) * (BITS_CRC + BITS_INFO))
+
+                if (in_mode(RECEIVER) && typeID == TYPEID_CONTENT_LAST)
                     return true;
                 else
                     prepare_for_new_packet();
@@ -840,7 +994,7 @@ bool DataSim::demodulate()
     int &typeID = receivedata.typeID;
     int &src = receivedata.src;
     int &noPacket = receivedata.noPacket;
-    int &bytesPacketContent = receivedata.bytesPacketContent;
+    int &bytesPacketContent = receivedata.bytesPacket;
     SAMPLE &amplitude = receivedata.amplitude;
     SAMPLE *samples = receivedata.samples;
 
