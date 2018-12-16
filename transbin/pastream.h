@@ -168,8 +168,8 @@ public:
 	void send(SendData &data, bool writewaves = false, const char* file_name = nullptr);
 	void send(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
-	void receive(ReceiveData &data, bool writewaves = false, const char* file_name = nullptr);
-	void receive(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
+	void receive(ReceiveData &data, bool text = false, bool writewaves = false, const char* file_name = nullptr);
+	void receive(DataCo &data, bool text = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void send_and_receive(DataSim &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
@@ -189,7 +189,6 @@ class SendData
 private:
 	enum status
 	{
-	    PENDING,
 		SIGNAL,                                   // Status of sending the single preamble and silence interval
 		CONTENT                                   // Status of sending the content
 	};
@@ -301,7 +300,7 @@ public:
                         const PaStreamCallbackTimeInfo *timeInfo,
                         PaStreamCallbackFlags statusFlags,
                         void* userData);
-	size_t write_to_file(const char* path); // Write received content data to a TXT file
+	size_t write_to_file(const char* path = nullptr, bool text = false); // Write received content data to a TXT file
 	size_t write_samples_to_file(const char* path); // Write recorded sound data to a WAV file
 };
 

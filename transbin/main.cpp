@@ -60,9 +60,22 @@ int main()
             BITS_CONTENT = 800;
             BYTES_CONTENT = BITS_CONTENT / 8;
             BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT + BITS_INFO;
-            select_audiodev(stream, true, false, true);
-            SendData data("INPUT.bin", false, data_sent, samples_sent);
-            stream.send(data, true);
+
+            int mode;
+            printf("Please choose the mode: 1.text. 2.binary ");
+            scanf("%d",&mode);
+            if (mode == 1)
+            {
+                select_audiodev(stream, true, false, true);
+                SendData data("INPUT.txt", true, data_sent, samples_sent);
+                stream.send(data, true);
+            }
+            else if (mode == 2)
+            {
+                select_audiodev(stream, true, false, true);
+                SendData data("INPUT.bin", false, data_sent, samples_sent);
+                stream.send(data, true);
+            }
             printf("%s", Options);
         }
         else if (option == 2)
@@ -70,25 +83,43 @@ int main()
             BITS_CONTENT = 800;
             BYTES_CONTENT = BITS_CONTENT / 8;
             BITS_NORMALPACKET = BITS_CRC + BITS_CONTENT + BITS_INFO;
+            int mode;
+            printf("Please choose the mode: 1.text. 2.binary ");
+            scanf("%d", &mode);
             select_audiodev(stream, true, true, false);
             ReceiveData data(MAX_TIME_RECORD, data_rec, samples_rec);
-            stream.receive(data, true);
+            stream.receive(data, mode == 1, true);
             printf("%s", Options);
         }
         else if (option == 3)
         {
+            int mode;
+            printf("Please choose the mode: 1.text. 2.binary ");
+            scanf("%d", &mode);
             select_audiodev(stream, true, true, true);
-            DataCo data(TRANSMITTER, "INPUT.bin", false, data_sent, data_rec, samples_sent, samples_rec,
-                    2, inet_addr("127.0.0.1"), 8888);
-            stream.send(data, true, "wavesent1.wav", true, "wavereceived1.wav");
+            if (mode == 1)
+            {
+                DataCo data(TRANSMITTER, "INPUT.txt", true, data_sent, data_rec, samples_sent, samples_rec,
+                            2, inet_addr("127.0.0.1"), 8888);
+                stream.send(data, true, "wavesent1.wav", true, "wavereceived1.wav");
+            }
+            else if (mode == 2)
+            {
+                DataCo data(TRANSMITTER, "INPUT.bin", false, data_sent, data_rec, samples_sent, samples_rec,
+                            2, inet_addr("127.0.0.1"), 8888);
+                stream.send(data, true, "wavesent1.wav", true, "wavereceived1.wav");
+            }
             printf("%s", Options);
         }
         else if (option == 4)
         {
+            int mode;
+            printf("Please choose the mode: 1.text. 2.binary ");
+            scanf("%d", &mode);
             select_audiodev(stream, true, true, true);
             DataCo data(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                     2, inet_addr("127.0.0.1"), 8888);
-            stream.receive(data, true, "wavesent2.wav", true, "wavereceived2.wav");
+            stream.receive(data, mode == 1, true, "wavesent2.wav", true, "wavereceived2.wav");
             printf("%s", Options);
         }
         else if (option == 5)
@@ -120,8 +151,8 @@ int main()
             char wavereceived[32];
             printf("Please input host node number: ");
             scanf("%d", &NODE);
-            sprintf(wavesent, "wavesent%d.wav", NODE);
-            sprintf(wavereceived, "wavereceived%d.wav", NODE);
+            sprintf(wavesent, "wavesent_transfer%d.wav", NODE);
+            sprintf(wavereceived, "wavereceived_transfer%d.wav", NODE);
 
             select_audiodev(stream, true, true, true);
             stream.transfer(A_TO_I, true, wavesent, true, wavereceived);
@@ -133,8 +164,8 @@ int main()
             char wavereceived[32];
             printf("Please input host node number: ");
             scanf("%d", &NODE);
-            sprintf(wavesent, "wavesent%d.wav", NODE);
-            sprintf(wavereceived, "wavereceived%d.wav", NODE);
+            sprintf(wavesent, "wavesent_transfer%d.wav", NODE);
+            sprintf(wavereceived, "wavereceived_transfer%d.wav", NODE);
 
             select_audiodev(stream, true, true, true);
             stream.transfer(I_TO_A, true, wavesent, true, wavereceived);

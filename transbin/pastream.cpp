@@ -266,7 +266,7 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
     }
 }
 
-void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
+void Stream::receive(ReceiveData &data, bool text, bool writewaves, const char* file_name)
 {
     open_input_stream(&data, ReceiveData::receiveCallback);
     start_input_stream();
@@ -284,7 +284,7 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
     close_input_stream();
     printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
     printf("Threshold: %f\n", data.threshold);
-    size_t n = data.write_to_file("OUTPUT.bin");
+    size_t n = data.write_to_file(nullptr, text);
     printf("**Writing is finished, %zu bytes have been write to in total.\n", n);
     if (writewaves)
     {
@@ -293,7 +293,7 @@ void Stream::receive(ReceiveData &data, bool writewaves, const char* file_name)
     }
 }
 
-void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_sent,
+void Stream::receive(DataCo &data, bool text, bool write_sent_waves, const char* file_wave_sent,
     bool write_rec_waves, const char* file_wave_rec)
 {
     open_output_stream(&data.send_data, SendData::sendCallback);
@@ -316,7 +316,7 @@ void Stream::receive(DataCo &data, bool write_sent_waves, const char* file_wave_
     close_output_stream();
     printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
     printf("Threshold: %f\n", data.receive_data.threshold);
-    size_t n = data.receive_data.write_to_file("OUTPUT.bin");
+    size_t n = data.receive_data.write_to_file(nullptr, text);
     printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
     if (write_rec_waves)
     {
@@ -338,10 +338,8 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
     Mode direct;
     if (mode_ == I_TO_A)
         direct = TRANSMITTER;
-    else if (mode_ == A_TO_I)
-        direct = RECEIVER;
     else
-        direct = TRANSMITTER;
+        direct = RECEIVER;
 
     DataCo data ((Mode)(direct | GATEWAY), nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
 
@@ -352,7 +350,8 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
 
     printf("Waiting for transferring to finish.\n");
 
-    while ((err = Pa_IsStreamActive(input_stream)) == 1)
+    while ((err = Pa_IsStreamActive(input_stream)) == 1
+            && (err = Pa_IsStreamActive(output_stream)) == 1 )
     {
         if (mode_ == I_TO_A)
             data.send_data.receive_udp_msg();
