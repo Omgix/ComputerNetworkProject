@@ -1,5 +1,6 @@
 ﻿#include "pastream.h"
 #include <cstdio>
+#include <arpa/inet.h>
 
 int Stream::error() {
     Pa_Terminate();
@@ -302,11 +303,27 @@ void Stream::receive(DataCo &data, bool text, bool write_sent_waves, const char*
     start_input_stream();
 
     printf("Waiting for receiving to finish.\n");
+    int no = 0;
+    uint8_t  *buf = data.receive_data.data;
 
     while ((err = Pa_IsStreamActive(input_stream)) == 1)
     {
-        printf("%d bytes received\r", data.receive_data.totalBytes); fflush(stdout);
-        Pa_Sleep(100);
+        //printf("%d bytes received\r", data.receive_data.totalBytes); fflush(stdout);
+        //Pa_Sleep(100);
+        if (no < data.receive_data.nextRecvNo)
+        {
+            int bytes = get_size(buf);
+            int ip = get_ip(buf);
+            uint16_t port = get_port(buf);
+            char ip_addr [INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &ip, ip_addr, INET_ADDRSTRLEN);
+            printf("From <%s, %d>, message: ", ip_addr, port);
+            for (int k = 0; k < bytes; ++k)
+                printf("%c", *(buf + BYTES_INFO + k));
+            printf("<End of a message>\n");
+            no++;
+            buf += BYTES_INFO + bytes;
+        }
     }
     if (err < 0) error();
     Pa_Sleep(500);
@@ -349,15 +366,17 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
     start_input_stream();
 
     printf("Waiting for transferring to finish.\n");
-
-    while ((err = Pa_IsStreamActive(input_stream)) == 1
-            && (err = Pa_IsStreamActive(output_stream)) == 1 )
+    if (mode_ == I_TO_A)
     {
-        if (mode_ == I_TO_A)
+        while ((err = Pa_IsStreamActive(output_stream)) == 1)
             data.send_data.receive_udp_msg();
-        else if (mode_ == A_TO_I)
+    }
+    else if (mode_ == A_TO_I)
+    {
+        while ((err = Pa_IsStreamActive(input_stream)) == 1)
             data.receive_data.send_udp_msg();
     }
+
     if (err < 0) error();
     Pa_Sleep(500);
     stop_input_stream();

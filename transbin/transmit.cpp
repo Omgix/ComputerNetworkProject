@@ -106,6 +106,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                         }
                         else if (*data->signal) // ACK received
                         {
+                            //printf("ACK #%d | %d received.\n", data->nextSendNo, data->typeID);
                             data->times_sent = 0;
                             data->wait = false;
                             if (data->typeID == TYPEID_CONTENT_LAST) // All data has been sent
@@ -186,7 +187,8 @@ SendData::SendData(const char* file_name, bool text, void *data_, SAMPLE *sample
     status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
     bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? need_ack_: true),
     wait(!in_mode(TRANSMITTER)), size(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
-    ack_timeout(timeout_), times_sent(0), ackNo(0), dst(dst_), ip(ip_), port(port_), nextSendNo(0), nextRecvNo(0)
+    ack_timeout(timeout_), times_sent(0), ackNo(0), dst(dst_), ip(ip_), port(port_), nextSendNo(0), nextRecvNo(0),
+    typeID(-1)
 {
     if (in_mode(TRANSMITTER))
     {
@@ -388,7 +390,7 @@ int SendData::receive_udp_msg()
     socklen_t len;
     ssize_t count;
     struct sockaddr_in client_addr;  //client_addr用于记录发送方的地址信息
-    const char *ipAddress = "127.0.0.1";
+    const char *ipAddress = "10.20.198.62";
 
     server_fd = socket(AF_INET, SOCK_DGRAM, 0);
     if(server_fd < 0)
@@ -429,7 +431,7 @@ int SendData::receive_udp_msg()
             printf("Receive data failed!\n");
             return -1;
         }
-        size_t msg_len = strnlen((char*) (buf_rec + BYTES_INFO), BUFF_LEN) + 1;
+        size_t msg_len = strnlen((char*) (buf_rec + BYTES_INFO), BUFF_LEN);
         printf("message: %s\n", (char*) (buf_rec + BYTES_INFO));
         sprintf(buf_send, "%zu bytes received.", msg_len);
         sendto(server_fd, buf_send, BUFF_LEN, 0, (struct sockaddr*)&client_addr, len);
@@ -440,7 +442,7 @@ int SendData::receive_udp_msg()
 
         printf("Get packet #%d with %zu bytes from <%s,%d>, now transfer.\n", i, msg_len, ip, port);
 
-        if (strncmp((char*)(buf_rec + BYTES_INFO), "end flag\n", 12) == 0)
+        if (strncmp((char*)(buf_rec + BYTES_INFO), "end flag\n", 9) == 0)
         {
             info[INDEX_BYTE_TYPEID] &= ~0xf0;
             info[INDEX_BYTE_TYPEID] |= (TYPEID_CONTENT_LAST << (OFFSET_TYPEID % 8));
@@ -671,15 +673,10 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     {
                         if (data->noPacket == data->nextRecvNo)
                         {
-                            if (!data->in_mode(GATEWAY))
-                                memcpy(wptr, data->packet[choice] + BYTES_INFO, data->bytesPacket);
-                            else
-                            {
-                                indexByte = (data->bitsReceived - bitsReceivedPacket) / 8 - data->nextRecvNo * (BYTES_CRC);
-                                wptr = data->data + indexByte;
-                                memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
-                                printf("%d bytes received.\n", data->bytesPacket);
-                            }
+                            indexByte = (data->bitsReceived - bitsReceivedPacket) / 8 - data->nextRecvNo * (BYTES_CRC);
+                            wptr = data->data + indexByte;
+                            memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
+                            //printf("%d bytes received.\n", data->bytesPacket);
                             data->nextRecvNo = data->noPacket + 1;
                             data->totalBytes += data->bytesPacket;
                         }
@@ -800,12 +797,12 @@ int ReceiveData::send_udp_msg()
     while (true)
     {
         int k = 0;
-        while (nextSendNo >= nextRecvNo) { /*printf("Waiting!! %d\n", ++k);*/}
+        while (nextSendNo >= nextRecvNo) { printf("Waiting!! %d\n", ++k);}
         len = sizeof(*(struct sockaddr*)&ser_addr);
         int no = get_no(buf);
         int msg_len = get_size(buf);
         ser_addr.sin_addr.s_addr = get_ip(buf);
-        ser_addr.sin_port = get_port(buf);
+        ser_addr.sin_port = htons(get_port(buf));
 
         uint16_t port = ser_addr.sin_port;
         char ip [INET_ADDRSTRLEN];
@@ -838,7 +835,7 @@ int ReceiveData::send_udp_msg()
 
 size_t ReceiveData::write_to_file(const char* path, bool text)
 {
-    unsigned n = 0;
+    size_t n = 0;
     if (!path) path = text? "OUTPUT.txt" : "OUTPUT.bin";
     const char *mode = text ? "w" : "wb";
     FILE *file = fopen(path, mode);
@@ -848,7 +845,16 @@ size_t ReceiveData::write_to_file(const char* path, bool text)
         fprintf(stderr, "Invalid file!\n");
         exit(-1);
     }
-    n = fwrite(data, sizeof(uint8_t), totalBytes, file);
+    uint8_t *buf = data;
+    while (true)
+    {
+        int size = get_size(buf);
+        int typeID = get_typeID(buf);
+        buf += BYTES_INFO;
+        n += fwrite(buf, sizeof(uint8_t), size, file);
+        if (typeID == TYPEID_CONTENT_LAST) break;
+        buf += size;
+    }
     fclose(file);
     return n;
 }
