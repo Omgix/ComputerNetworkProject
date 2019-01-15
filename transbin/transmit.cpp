@@ -840,7 +840,7 @@ int DataCo::connect_FTP()
     set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
     memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
     set_packet_CRC(send_ptr);
-    send_ptr += BYTES_INFO + act_len + BYTES_CRC;
+    //send_ptr += BYTES_INFO + act_len + BYTES_CRC;
     reset();
     signal = true;
     receive_data.nextSendNo++;
@@ -868,10 +868,10 @@ int DataCo::connect_FTP()
         read_buf[read_len - 1] = '\0';
         act_len = command_len((char *)read_buf, read_len);
         printf("Message: %zu\n%s", act_len, read_buf);
-        set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, no, 0, 0);
+        set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
         memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
         set_packet_CRC(send_ptr);
-        send_ptr += BYTES_INFO + act_len + BYTES_CRC;
+        //send_ptr += BYTES_INFO + act_len + BYTES_CRC;
         reset();
         signal = true;
         if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
