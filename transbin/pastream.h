@@ -137,7 +137,7 @@ static bool get_ipport_PASV(const char * msg, in_addr_t *ip, uint16_t *port)
 	result2 = result2 * 256 + atoi(curr);
 	curr = strtok_r(nullptr, ",()", &save_ptr);
 	result2 = result2 * 256 + atoi(curr);
-	*port = result2;
+	*port = htons(result2);
 	return true;
 }
 

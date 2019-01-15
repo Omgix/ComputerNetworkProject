@@ -215,7 +215,6 @@ int main()
             int op;
             while ((op = select_FTP_commands(send_buf)) != -1)
             {
-                printf("Now send to server\n");
                 size_t len = strnlen(send_buf, 512);
                 int typeID = op == 6? TYPEID_ASK_SPEC: TYPEID_ASK_NORMAL;
                 DataCo data2(send_buf, len + 1, typeID, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf),
@@ -223,8 +222,8 @@ int main()
                 stream.send(data2);
                 if (op == 6)
                 {
-                    DataCo data3(RECEIVER, nullptr, TYPEID_NONE, data_sent, data_rec, samples_sent, samples_rec,
-                                dst, inet_addr(input_buf), 21);
+                    DataCo data3((Mode)(RECEIVER|FTP_CLIENT), nullptr, TYPEID_NONE, data_sent, data_rec,
+                            samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
                     stream.receive(data3);
                 }
             }

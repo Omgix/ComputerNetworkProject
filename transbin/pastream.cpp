@@ -242,7 +242,7 @@ void Stream::send(DataCo &data, bool print, bool write_sent_waves, const char* f
     start_output_stream();
     uint8_t *buf = data.receive_data.data;
     int no = 0;
-    printf("\nFTP server:\n");
+    printf("\n-----Reply From the FTP Server------\n");
     while ((err = Pa_IsStreamActive(output_stream)) == 1 && (err = Pa_IsStreamActive(input_stream)) == 1)
     {
         if (no < data.receive_data.nextRecvNo)
@@ -255,7 +255,7 @@ void Stream::send(DataCo &data, bool print, bool write_sent_waves, const char* f
             }
             if (get_typeID(buf) == TYPEID_ANSWER_LAST)
             {
-                printf("\n");
+                printf("---------------------------------\n\n");
                 break;
             }
             no++;
