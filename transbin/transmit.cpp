@@ -302,7 +302,13 @@ typeID(-1)
         data = new uint8_t[10000];
     if (!ext_sample_ptr)
         samples = new SAMPLE[10000];
-    set_packet_header(data, NODE, dst, typeID_, size_, 0, ip, port);
+    int no = 0;
+    if (in_mode(FTP_CLIENT))
+    {
+        static int totalNo = 0;
+        no = totalNo++;
+    }
+    set_packet_header(data, NODE, dst, typeID_, size_, no, ip, port);
     memcpy(data + BYTES_INFO, src_, size_);
     set_packet_CRC(data);
 }
@@ -592,8 +598,8 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     data->typeID = get_typeID(data->packet[choice]);
                     data->bytesPacket = get_size(data->packet[choice]);
                     data->noPacket = get_no(data->packet[choice]);
-                    //printf("packet %d: type: %d, index: %d, src: %d, bytes: %d\n",
-                    //data->noPacket, data->typeID, frameIndex, data->src, data->bytesPacket);
+                    printf("packet %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                    data->noPacket, data->typeID, frameIndex, data->src, data->bytesPacket);
                 }
                 if (packetFrameIndex >=
                 SAMPLES_PER_N_BIT * (BYTES_INFO + data->bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
@@ -623,7 +629,7 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                             wptr = data->data + indexByte;
                             memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
 
-                            //printf("%d bytes received.\n", data->bytesPacket);
+                            printf("%d bytes received.\n", data->bytesPacket);
                             if (!data->in_mode(FTP_CLIENT))
                                 data->nextRecvNo = data->noPacket + 1;
                             else
@@ -840,7 +846,7 @@ int DataCo::connect_FTP()
     receive_data.nextSendNo++;
     while (true)
     {
-        while (receive_data.nextSendNo >= receive_data.nextRecvNo) { printf("\r");fflush(stdout); }
+        while (receive_data.nextSendNo >= receive_data.nextRecvNo) { printf("Sym\r");fflush(stdout); }
         int no = get_no(ptr);
         int msg_len = get_size(ptr);
         if (get_typeID(ptr) == TYPEID_CONTENT_LAST)
@@ -852,11 +858,17 @@ int DataCo::connect_FTP()
         inet_ntop(AF_INET, &(server.sin_addr), ip, INET_ADDRSTRLEN);
 
         printf("Get packet #%d with %d bytes, send it to <%s,%d>\n", no, msg_len, ip, port);
+        printf("From client: ");
+        for (int i = 0; i < msg_len; ++i)
+            printf("%c", *(ptr + BYTES_INFO + i));
+        printf("\n");
 
         write(control_sock, ptr + BYTES_INFO, msg_len);
         read(control_sock, read_buf, read_len);
+        read_buf[read_len - 1] = '\0';
         act_len = command_len((char *)read_buf, read_len);
-        set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
+        printf("Message: %zu\n%s", act_len, read_buf);
+        set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, no, 0, 0);
         memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
         set_packet_CRC(send_ptr);
         send_ptr += BYTES_INFO + act_len + BYTES_CRC;

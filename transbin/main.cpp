@@ -215,6 +215,7 @@ int main()
             int op;
             while ((op = select_FTP_commands(send_buf)) != -1)
             {
+                printf("Now send to server\n");
                 size_t len = strnlen(send_buf, 512);
                 int typeID = op == 6? TYPEID_ASK_SPEC: TYPEID_ASK_NORMAL;
                 DataCo data2(send_buf, len + 1, typeID, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf),
@@ -295,7 +296,9 @@ int select_FTP_commands(char *ask)
                 printf("Please complete the command:\n");
                 printf("%s ", FTP_Commands[op[0] - '1']);
                 sprintf(ask, "%s ", FTP_Commands[op[0] - '1']);
-                scanf("%s\r\n", ask + strlen(FTP_Commands[op[0] - '1']) + 1);
+                scanf("%s", ask + strlen(FTP_Commands[op[0] - '1']) + 1);
+                size_t len = strnlen(ask, 256);
+                sprintf(ask + len, " \r\n");
             }
             else
                 sprintf(ask, "%s \r\n", FTP_Commands[op[0] - '1']);
