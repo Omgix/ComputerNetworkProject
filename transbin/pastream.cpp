@@ -213,7 +213,7 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
 
     printf("Waiting for sending to finish.\n");
     unsigned total = data.totalBits;
-    while ((err = Pa_IsStreamActive(output_stream)) == 1) 
+    while ((err = Pa_IsStreamActive(output_stream)) == 1)
     {
         printf("% 3.2f%% Completed\r", (float)data.bitIndex * 100 / total); fflush(stdout);
         Pa_Sleep(100);
@@ -231,18 +231,36 @@ void Stream::send(SendData &data, bool writewaves, const char* file_name)
     }
 }
 
-void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sent, 
+void Stream::send(DataCo &data, bool print, bool write_sent_waves, const char* file_wave_sent,
                 bool write_rec_waves, const char* file_wave_rec)
 {
-    printf("Waiting for sending to finish.\n");
-    unsigned total = data.send_data.totalBits;
+    if (print)
+        printf("Waiting for sending to finish.\n");
     open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
     open_output_stream(&data.send_data, SendData::sendCallback);
     start_input_stream();
     start_output_stream();
-    while ((err = Pa_IsStreamActive(output_stream)) == 1)
+    uint8_t *buf = data.receive_data.data;
+    int no = 0;
+    printf("\nFTP server:\n");
+    while ((err = Pa_IsStreamActive(output_stream)) == 1 && (err = Pa_IsStreamActive(input_stream)) == 1)
     {
-        printf("% 3.2f%% Completed\r", (float)data.send_data.bitIndex * 100 / total); fflush(stdout);
+        if (no < data.receive_data.nextRecvNo)
+        {
+            int bytes = get_size(buf);
+            if (get_typeID(buf) == TYPEID_ANSWER || get_typeID(buf) == TYPEID_ANSWER_LAST)
+            {
+                for (int k = 0; k < bytes; ++k)
+                    printf("%c", *(buf + BYTES_INFO + k));
+            }
+            if (get_typeID(buf) == TYPEID_ANSWER_LAST)
+            {
+                printf("\n");
+                break;
+            }
+            no++;
+            buf += BYTES_INFO + bytes;
+        }
     }
     if (err < 0) error();
     stop_input_stream();
@@ -251,7 +269,7 @@ void Stream::send(DataCo &data, bool write_sent_waves, const char* file_wave_sen
     close_output_stream();
     if (data.send_data.wait)
         printf("\nLINK ERROR!!\n");
-    else
+    else if (print)
         printf("\n###################### Sending has been done. #######################\n");
     if (write_sent_waves)
     {
@@ -317,7 +335,7 @@ void Stream::receive(DataCo &data, bool text, bool write_sent_waves, const char*
             uint16_t port = get_port(buf);
             char ip_addr [INET_ADDRSTRLEN];
             inet_ntop(AF_INET, &ip, ip_addr, INET_ADDRSTRLEN);
-            printf("From <%s, %d>, message: ", ip_addr, port);
+            printf("From <%s, %d>, message: \n", ip_addr, port);
             for (int k = 0; k < bytes; ++k)
                 printf("%c", *(buf + BYTES_INFO + k));
             printf("<End of a message>\n");
@@ -353,11 +371,13 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
                       bool write_rec_waves, const char *file_wave_rec)
 {
     Mode direct;
-    if (mode_ == I_TO_A)
+    if (is_I2A(mode_))
         direct = TRANSMITTER;
     else
         direct = RECEIVER;
 
+    if (is_FTP(mode_))
+        direct = (Mode)(RECEIVER | FTP_CLIENT);
     DataCo data ((Mode)(direct | GATEWAY), nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
 
     open_output_stream(&data.send_data, SendData::sendCallback);
@@ -366,14 +386,15 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
     start_input_stream();
 
     printf("Waiting for transferring to finish.\n");
-    if (mode_ == I_TO_A)
+    if (is_I2A(mode_))
     {
-        while ((err = Pa_IsStreamActive(output_stream)) == 1)
-            data.send_data.receive_udp_msg();
+        data.send_data.receive_udp_msg();
     }
-    else if (mode_ == A_TO_I)
+    else
     {
-        while ((err = Pa_IsStreamActive(input_stream)) == 1)
+        if (is_FTP(mode_))
+            data.connect_FTP();
+        else
             data.receive_data.send_udp_msg();
     }
 
@@ -432,13 +453,6 @@ void Stream::send_and_receive(DataSim &data, bool write_sent_waves, const char* 
     sprintf(outputfile, "OUTPUT%dto%d.bin", data.dst, NODE);
     printf("\n#### Receiving is finished!! Now write the data to the file %s. ####\n", outputfile);
     size_t n = data.receivedata.write_to_file(outputfile);
-    /*sprintf(outputfile, "square%d.wav", NODE);
-    int format = SF_FORMAT_WAV | SF_FORMAT_FLOAT;
-    int channels = NUM_CHANNELS;
-    int srate = SAMPLE_RATE;
-    SndfileHandle file = SndfileHandle(outputfile, SFM_WRITE, format, channels, srate);
-    file.writeSync();
-    file.write(square, data.receivedata.frameIndex);*/
     printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
 
     if (write_rec_waves)

@@ -7,6 +7,9 @@
 #include <chrono>
 #include <queue>
 #include <netinet/in.h>
+#include "crc-8.h"
+#include "crc.h"
+#include <cstring>
 
 #define PA_SAMPLE_TYPE  paFloat32
 typedef float SAMPLE;
@@ -27,7 +30,7 @@ typedef std::chrono::microseconds microseconds;
 const int SAMPLE_RATE = 44100;          // SAMPLE_RATE frames in a second
 const int NUM_CHANNELS = 1;             // Mono channel will be used
 const int FRAMES_PER_BUFFER = 512;      // Size of the buffer
-const int BITS_INFO = 80;
+const int BITS_INFO = 88;
 const int BYTES_INFO = BITS_INFO / 8;
 extern int BITS_CONTENT;        // Number of content bits in a packet
 extern int BYTES_CONTENT;
@@ -51,7 +54,7 @@ const float THRESHOLD_DEMODULATE = 0.f; // 2-PSK threshold to determine what we 
 const float THRESHOLD_ASSURING = 50.f;  // Convolution threshold of starting adjusting preamble threshold
 const float A = 0.95f;                  // Amplitude of the sound
 const float CONSTANT_AMPLIFY = 1;       // The constant that will be multiplied in the frames that Rx received.
-const int MAX_TIME_RECORD = 90;         // Max recording time in seconds
+const int MAX_TIME_RECORD = 120;         // Max recording time in seconds
 const int INITIAL_INDEX_RX = 100;
 const int BITS_PER_BYTE = 8;
 const int TIMES_TRY = 10;
@@ -73,69 +76,150 @@ const int OFFSET_TYPEID = 4;
 const int INDEX_BYTE_TYPEID = OFFSET_TYPEID / 8;
 const int OFFSET_SIZE = 8;
 const int INDEX_BYTE_SIZE = OFFSET_SIZE / 8;
-const int OFFSET_NO = 16;
+const int OFFSET_NO = 24;
 const int INDEX_BYTE_NO = OFFSET_NO / 8;
-const int OFFSET_IP = 24;
+const int OFFSET_IP = 32;
 const int INDEX_BYTE_IP = OFFSET_IP / 8;
-const int OFFSET_PORT = 56;
+const int OFFSET_PORT = 64;
 const int INDEX_BYTE_PORT = OFFSET_PORT / 8;
 
 const int TYPEID_CONTENT_NORMAL = 0;
 const int TYPEID_CONTENT_LAST = 1;
 const int TYPEID_ACK = 3;
 const int TYPEID_ACK_LAST = 5;
+const int TYPEID_ASK_NORMAL = 7;
+const int TYPEID_ASK_SPEC = 8;
+const int TYPEID_ANSWER = 9;
+const int TYPEID_ANSWER_LAST = 11;
 const int TYPEID_NONE = 0xf;
 extern int NODE;
 
-extern uint8_t data_sent[10000];
-extern uint8_t data_rec[10000];
+extern uint8_t data_sent[1024*1024];
+extern uint8_t data_rec[1024*1024];
 extern SAMPLE samples_sent[MAX_TIME_RECORD * SAMPLE_RATE];
 extern SAMPLE samples_rec[MAX_TIME_RECORD * SAMPLE_RATE];
 
-inline int get_typeID (const uint8_t* packet) {
-    return (packet[INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
+static size_t command_len(const char *str, size_t n)
+{
+	for (size_t i = 0; i < n; ++i)
+		if (str[i] == '\r' && str [i + 1] == '\n')
+			return i + 2;
+
+	return 0;
 }
 
-inline int get_size (const uint8_t* packet) {
-    return (packet[INDEX_BYTE_SIZE] >> (OFFSET_SIZE % 8)) & 0xff;
+static bool get_ipport_PASV(const char * msg, in_addr_t *ip, uint16_t *port)
+{
+	if (strncmp(msg, "227", 3) != 0)
+		return false;
+	in_addr_t result1 = 0;
+	uint16_t result2 = 0;
+	int i;
+	for (i = 3; i < 512; ++i)
+		if (msg[i] == '(')
+			break;
+	if (i == 512) return false;
+
+	char tmp[512];
+	size_t len = command_len(msg, 512) - i;
+	memcpy(tmp, msg + i, len);
+	char *save_ptr, *curr;
+	curr = strtok_r(tmp, ",()", &save_ptr);
+	result1 = result1 * 256 + atoi(curr);
+	curr = strtok_r(nullptr, ",()", &save_ptr);
+	result1 = result1 * 256 + atoi(curr);
+	curr = strtok_r(nullptr, ",()", &save_ptr);
+	result1 = result1 * 256 + atoi(curr);
+	curr = strtok_r(nullptr, ",()", &save_ptr);
+	result1 = result1 * 256 + atoi(curr);
+	*ip = result1;
+	curr = strtok_r(nullptr, ",()", &save_ptr);
+	result2 = result2 * 256 + atoi(curr);
+	curr = strtok_r(nullptr, ",()", &save_ptr);
+	result2 = result2 * 256 + atoi(curr);
+	*port = result2;
+	return true;
 }
 
-inline int get_no (const uint8_t* packet) {
-    return (packet[INDEX_BYTE_NO] >> (OFFSET_NO % 8)) & 0xff;
+static bool use_data_sock(const char *command)
+{
+	if (strncmp(command, "RETR", 4) == 0)
+		return true;
+	return false;
 }
 
-inline int get_src (const uint8_t* packet) {
-    return (packet[INDEX_BYTE_SRC] >> (OFFSET_SRC % 8)) & 0x3;
+static inline int get_typeID (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
 }
 
-inline int get_dst (const uint8_t* packet) {
-    return (packet[INDEX_BYTE_DST] >> (OFFSET_DST % 8)) & 0x3;
+static void set_packet_header (uint8_t* packet, int src, int dst, int typeID,
+						size_t size, int no, in_addr_t ip, uint16_t port)
+{
+	memset(packet, 0, BYTES_INFO);
+	packet[INDEX_BYTE_SRC] |= (src << (OFFSET_SRC % 8));
+	packet[INDEX_BYTE_DST] |= (dst << (OFFSET_DST % 8));
+	packet[INDEX_BYTE_TYPEID] |= (typeID << (OFFSET_TYPEID % 8));
+	packet[INDEX_BYTE_SIZE] |= (size << (OFFSET_SIZE % 8));
+	packet[INDEX_BYTE_NO] |= (no << (OFFSET_NO % 8));
+	*(in_addr_t*)(packet + INDEX_BYTE_IP) = ip;
+	*(uint16_t*)(packet + INDEX_BYTE_PORT) = port;
+	crc8_t crc8 = crc8_init();
+	crc8 = crc8_update(crc8, packet, BYTES_INFO - 1);
+	crc8 = crc8_finalize(crc8);
+	memcpy(packet + BYTES_INFO - 1, &crc8, 1);
 }
 
-inline in_addr_t get_ip (const uint8_t* packet) {
+static inline uint16_t get_size (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_SIZE] >> (OFFSET_SIZE % 8)) & 0xffff;
+}
+
+static inline int get_no (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_NO] >> (OFFSET_NO % 8)) & 0xff;
+}
+
+static inline int get_src (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_SRC] >> (OFFSET_SRC % 8)) & 0x3;
+}
+
+static inline int get_dst (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_DST] >> (OFFSET_DST % 8)) & 0x3;
+}
+
+static inline in_addr_t get_ip (const uint8_t* packet) {
 	return *(in_addr_t*)(packet + INDEX_BYTE_IP);
 }
 
-inline uint16_t get_port (const uint8_t* packet) {
+static inline uint16_t get_port (const uint8_t* packet) {
 	return *(uint16_t*)(packet + INDEX_BYTE_PORT);
 }
 
-inline void set_ip (const uint8_t* packet, in_addr_t ip) {
+static inline void set_ip (const uint8_t* packet, in_addr_t ip) {
 	*(in_addr_t*)(packet + INDEX_BYTE_IP) = ip;
 }
 
-inline void set_port (const uint8_t* packet, uint16_t port) {
+static inline void set_port (const uint8_t* packet, uint16_t port) {
 	*(uint16_t*)(packet + INDEX_BYTE_PORT) = port;
 }
 
-enum TransferMode
+static void set_packet_CRC(uint8_t *packet)
 {
-    I_TO_A,
-    A_TO_I
-};
+	int size = get_size(packet);
+	crc_t crc = crc_init();
+	crc = crc_update(crc, packet, size + BYTES_INFO);
+	crc = crc_finalize(crc);
+	uint8_t *ptr = packet + size + BYTES_INFO;
+	memcpy(ptr, &crc, BYTES_CRC);
+}
 
 class Stream
 {
+public:
+    enum TransferMode
+    {
+        I_TO_A = 0x1,
+        A_TO_I = 0x0,
+        FTP = 0x2
+    };
 private:
 	PaError						err;
 	unsigned long				bufferSize;
@@ -145,6 +229,8 @@ private:
 	PaStream*					output_stream;
 	static int					numStream;
 	int error();
+	bool is_I2A(TransferMode mode_) { return mode_ & 0x1; }
+    bool is_FTP(TransferMode mode_) { return mode_ & 0x2; }
 	void set_input_para(int receiveDeviceNo);
 	void set_output_para(int sendDeviceNo);
 	void open_input_stream(ReceiveData *data, PaStreamCallback callback);
@@ -166,7 +252,7 @@ public:
 	bool select_input_device(int device_no);
 	bool select_output_device(int device_no);
 	void send(SendData &data, bool writewaves = false, const char* file_name = nullptr);
-	void send(DataCo &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
+	void send(DataCo &data, bool print = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void receive(ReceiveData &data, bool text = false, bool writewaves = false, const char* file_name = nullptr);
 	void receive(DataCo &data, bool text = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
@@ -181,19 +267,21 @@ enum Mode
 {
 	TRANSMITTER = 0x1,
 	RECEIVER = 0x2,
-	GATEWAY = 0x4
+	GATEWAY = 0x4,
+	FTP_CLIENT = 0x8
 };
 
 class SendData
 {
 private:
+	friend class DataCo;
 	enum status
 	{
 		SIGNAL,                                   // Status of sending the single preamble and silence interval
 		CONTENT                                   // Status of sending the content
 	};
 	const PaStreamCallbackTimeInfo* time_info;
-	const Mode mode;
+	Mode mode;
 	bool need_ack;
 	bool wait;
 	timepoint time_send;
@@ -208,7 +296,7 @@ private:
 	unsigned long fileFrameIndex;                 // Index of the sound frame that will send
 	unsigned bitIndex;                            // Index of the bit that will send
 	unsigned totalBits;
-	unsigned size;                                // Total number of bytes that will send.
+	size_t size;                                  // Total number of bytes that will send.
 	unsigned packetFrameIndex;                    // Index of the sound frame in a packet
 	bool isPreamble;                              // Indicate if we will send a preamble frame
 	bool isNewPacket;                             // Indicate if the next frame we will send is in a new packet
@@ -219,19 +307,25 @@ private:
     int noPacket;
     in_addr_t ip;
     uint16_t port;
+    size_t packets;
     int bytesPacket; // Used in demodulation
     int nextSendNo;
     int nextRecvNo;
 	inline void prepare_for_new_sending();
-	inline bool in_mode(Mode mode_);
+	bool in_mode(Mode mode_);
 	void set_ack(const int dst, const int no, const bool last);
 	int receive_udp_msg();
 	friend class Stream;
 	friend class DataSim;
 public:
-	explicit SendData(const char* file_name = nullptr, bool text = false, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
+	explicit SendData(const char* file_name = nullptr, bool text = false, void *data_ = nullptr,
+			SAMPLE *samples_ = nullptr,
 	        microseconds timeout_ = microseconds(2000000), bool need_ack_ = false, Mode mode_ = TRANSMITTER,
 	        bool *ack_received_ = nullptr, int dst = 0, in_addr_t ip_ = 0, uint16_t port_ = 0);
+	SendData(void *src_, size_t size_, int typeID_, void *data_ , int dst, in_addr_t ip_, uint16_t port_,
+			SAMPLE *samples_ = nullptr,
+             microseconds timeout_ = microseconds(2000000), bool need_ack_ = false, Mode mode_ = TRANSMITTER,
+             bool *ack_received_ = nullptr);
 	~SendData();
 	SendData(const SendData &rhs) = delete;
 	SendData &operator=(const SendData &rhs) = delete;
@@ -246,6 +340,7 @@ public:
 class ReceiveData
 {
 private:
+	friend class DataCo;
 	enum status
 	{
 		WAITING,        // Status of waiting for the single preamble
@@ -263,13 +358,12 @@ private:
 	int align[5] = { 0, -1, 1, -2, 2 };
 	bool ext_data_ptr;
 	bool ext_sample_ptr;
-	unsigned packetFrameIndex;        // Index of the sound frame in a packet
-	SAMPLE threshold;                 // Convolution threshold, used in status DETECTING to find the first packet's preamble
+	unsigned packetFrameIndex;   // Index of the sound frame in a packet
+	SAMPLE threshold;            // Convolution threshold, used in status DETECTING to find the first packet's preamble
 	SAMPLE amplitude;
 	unsigned bitsReceived;       // Number of bits that has received
 	unsigned numSamplesReceived; // Number of samples (frames) that has received
 	const unsigned maxNumFrames; // Max number of samples (frames) that can be received
-	unsigned frameIndex;         // Used in demodulation thread (demodulate()) to indicate the index of frame that is being demodulated
 	unsigned startFrom;
 	int src;
 	int dst;
@@ -278,6 +372,7 @@ private:
 	int bytesPacket; // Used in demodulation
     int nextSendNo;
     int nextRecvNo;
+	unsigned frameIndex;
 	unsigned totalBytes;
 	inline void prepare_for_new_packet();
 	inline void prepare_for_receiving();
@@ -286,7 +381,6 @@ private:
 	void correct_threshold();               // Adjusting convolution threshold in status ASSURING
 	bool correlate_next();                  // Calculate the convolution
     int send_udp_msg();
-	bool demodulate();                      // Demodulate received frames
 	friend class Stream;
 	friend class DataSim;
 public:
@@ -312,12 +406,16 @@ private:
 	SendData send_data;
 	ReceiveData receive_data;
 	friend class Stream;
+	void reset();
 public:
 	explicit DataCo(Mode mode_, const char *send_file = nullptr, bool text = false, void *data_sent_ = nullptr,
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr,
                     int dst_ = 0, in_addr_t ip_ = 0, uint16_t port_ = 0);
+	DataCo(void *src_, size_t size_, int typeID_, Mode mode_, int dst_ , in_addr_t ip_ , uint16_t port_ ,
+			void *data_sent_ , void *data_rec_ , SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
+    int connect_FTP();
 };
 
 class DataSim
