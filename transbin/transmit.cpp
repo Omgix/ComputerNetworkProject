@@ -11,7 +11,6 @@
 #include <netdb.h>
 
 bool in = false;
-bool first = true;
 float square[MAX_TIME_RECORD * SAMPLE_RATE];
 
 int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
@@ -40,7 +39,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
             {
                 *wptr++ = SAMPLE_SILENCE;
                 data->samples[fileFrameIndex++] = SAMPLE_SILENCE;
-                if (*data->signal && data->in_mode(RECEIVER))
+                if ((*data->signal) != 0 && data->in_mode(RECEIVER))
                 {
                     data->wait = false;
                     break;
@@ -101,7 +100,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                                 data->ack_timeout -= DURATION_SIGNAL;
                             data->bitIndex -= index / SAMPLES_PER_N_BIT * NUM_CARRIRER;
                         }
-                        else if (*data->signal) // ACK received
+                        else if (*data->signal == 1) // ACK received
                         {
                             //printf("ACK #%d | %d received.\n", data->nextSendNo, data->typeID);
                             data->times_sent = 0;
@@ -119,8 +118,13 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                     }
                     else if (data->in_mode(RECEIVER)) // Prepare for sending ACK.
                     {
-                        if (*data->signal)
+                        if (*data->signal == 1)
                             data->wait = false;
+                        else if (*data->signal == -1)
+                        {
+                            data->bitIndex -= index / SAMPLES_PER_N_BIT * NUM_CARRIRER;
+                            data->wait = false;
+                        }
                     }
                     continue;
                 }
@@ -131,6 +135,8 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 data->isNewPacket = false;
                 data->isPreamble = true;
                 index = 0;
+                printf("packet send: %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                       data->noPacket, data->typeID, index, data->src, data->bytesPacket);
             }
             if (data->isPreamble)
             {
@@ -170,7 +176,7 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                     {
                         data->time_send = std::chrono::system_clock::now();
                         data->wait = true;
-                        *data->signal = false;
+                        *data->signal = 0;
                     }
                     if (data->in_mode(TRANSMITTER) && data->typeID == TYPEID_CONTENT_LAST && !data->need_ack)
                         return paComplete;
@@ -184,10 +190,10 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
 }
 
 SendData::SendData(const char* file_name, bool text, void *data_, SAMPLE *samples_, microseconds timeout_,
-    bool need_ack_, Mode mode_, bool *ack_received_, int dst_, in_addr_t ip_, uint16_t port_) :
+    bool need_ack_, Mode mode_, int *signal_, int dst_, in_addr_t ip_, uint16_t port_) :
     status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
     bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? need_ack_: true),
-    wait(!in_mode(TRANSMITTER)), size(0), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
+    wait(!in_mode(TRANSMITTER)), size(0), data((uint8_t*)data_), samples(samples_), signal(signal_),
     ack_timeout(timeout_), times_sent(0), ackNo(0), dst(dst_), ip(ip_), port(port_), nextSendNo(0), nextRecvNo(0),
     typeID(-1)
 {
@@ -291,10 +297,10 @@ SendData::SendData(const char* file_name, bool text, void *data_, SAMPLE *sample
 }
 
 SendData::SendData(void *src_, size_t size_, int typeID_, void *data_ , int dst_, in_addr_t ip_, uint16_t port_,
-        SAMPLE *samples_, microseconds timeout_, bool need_ack_, Mode mode_, bool *ack_received_):
+        SAMPLE *samples_, microseconds timeout_, bool need_ack_, Mode mode_, int *signal_):
 status(SIGNAL), fileFrameIndex(0), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr), mode(mode_),
 bitIndex(0), packetFrameIndex(0), isPreamble(true), isNewPacket(true), need_ack(in_mode(TRANSMITTER) ? need_ack_: true),
-wait(!in_mode(TRANSMITTER)), size(size_), data((uint8_t*)data_), samples(samples_), signal(ack_received_),
+wait(!in_mode(TRANSMITTER)), size(size_), data((uint8_t*)data_), samples(samples_), signal(signal_),
 ack_timeout(timeout_), times_sent(0), ackNo(0), dst(dst_), ip(ip_), port(port_), nextSendNo(0), nextRecvNo(0),
 typeID(-1)
 {
@@ -324,7 +330,7 @@ SendData::~SendData()
 void SendData::prepare_for_new_sending()
 {
     isNewPacket = true;
-    if (in_mode(RECEIVER))
+    if (in_mode(RECEIVER) && !in_mode(GATEWAY) && !in_mode(FTP_CLIENT))
         bitIndex -= packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
 }
 
@@ -497,14 +503,6 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                 amplitude -= abs(samples[frameIndex - PERIOD]);
             }
             if (data->status == RECEIVING && !in && data->in_mode(RECEIVER)) {
-                if (first)
-                {
-                    printf("Start receiving!\n");
-                    printf("Start from frame #%u\n", frameIndex);
-                    printf("New packet from frame #%u\n", frameIndex);
-                    startFrom = frameIndex - LEN_SIGNAL - LEN_PREAMBLE;
-                    first = false;
-                }
                 in = true;
             }
             if (data->status == WAITING || data->status == ASSURING)
@@ -621,36 +619,32 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                             break;
                         }
                     }
-                    if (canAc || (data->in_mode(RECEIVER) && !data->need_ack))
+                    if ((canAc || (data->in_mode(RECEIVER) && !data->need_ack)) &&
+                        data->noPacket == data->nextRecvNo)
                     {
-                        if (data->noPacket == data->nextRecvNo)
-                        {
-                            indexByte = (data->bitsReceived - bitsReceivedPacket) / 8 - data->nextRecvNo * (BYTES_CRC);
-                            wptr = data->data + indexByte;
-                            memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
+                        indexByte = (data->bitsReceived - bitsReceivedPacket) / 8 - data->nextRecvNo * (BYTES_CRC);
+                        wptr = data->data + indexByte;
+                        memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
 
-                            //printf("%d bytes received.\n", data->bytesPacket);
-                            data->nextRecvNo = data->noPacket + 1;
-                            data->totalBytes += data->bytesPacket;
-                        }
-                        else
-                        {
-                            data->bitsReceived -= bitsReceivedPacket;
-                        }
+                        printf("%d bytes received.\n", data->bytesPacket);
+                        data->nextRecvNo = data->noPacket + 1;
+                        data->totalBytes += data->bytesPacket;
                     }
                     else if (data->in_mode(RECEIVER))
                     {
                         data->bitsReceived -= bitsReceivedPacket;
+                        if (data->noPacket == data->nextRecvNo - 1)
+                            *data->signal = -1;
                     }
 
-                    if ((data->need_ack && data->in_mode(RECEIVER) && canAc) ||
+                    if ((data->need_ack && data->in_mode(RECEIVER) && canAc && !data->in_mode(GATEWAY)) ||
                     (data->in_mode(TRANSMITTER) && !data->in_mode(GATEWAY)))
                     {
                         //printf("Signal ACK.\n");
-                        *data->signal = true;
+                        *data->signal = 1;
                     }
 
-                    if (data->in_mode(RECEIVER) && !data->in_mode(FTP_CLIENT)
+                    if (data->in_mode(RECEIVER) && !data->in_mode(GATEWAY)
                         && data->typeID == TYPEID_CONTENT_LAST)
                         return paComplete;
                     else
@@ -662,14 +656,13 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
     return finished;
 }
 
-ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_,
-    bool need_ack_, Mode mode_, bool *ack_received_) :
+ReceiveData::ReceiveData(unsigned max_time, void *data_, SAMPLE *samples_, bool need_ack_, Mode mode_, int *signal_) :
     status(WAITING), ext_data_ptr(data_ != nullptr), ext_sample_ptr(samples_ != nullptr),
     data(data_ == nullptr ? new uint8_t[max_time * SAMPLE_RATE / SAMPLES_PER_N_BIT * NUM_CARRIRER] : (uint8_t *)data_),
     samples(samples_ == nullptr ? new SAMPLE[max_time*SAMPLE_RATE] : samples_), noPacket(-1),
     packetFrameIndex(0), threshold(0.0f), amplitude(0.0f), packet(new uint8_t*[5]), nextRecvNo(0), nextSendNo(0),
     bitsReceived(0), numSamplesReceived(0), maxNumFrames(max_time * SAMPLE_RATE), totalBytes(0),
-    frameIndex(INITIAL_INDEX_RX), startFrom(0), mode(mode_), signal(ack_received_),
+    frameIndex(INITIAL_INDEX_RX), startFrom(0), mode(mode_), signal(signal_),
     need_ack(in_mode(TRANSMITTER) ? true : need_ack_), typeID(TYPEID_NONE), src(-1), bytesPacket(-1)
 {
     for (int i = 0; i < 5; ++i)
@@ -709,12 +702,14 @@ bool ReceiveData::in_mode(Mode mode_) {
 
 void ReceiveData::correct_threshold()
 {
-    SAMPLE cur = 0.0f;
-
-    for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
-        cur += samples[frameIndex - LEN_PREAMBLE + i] * preamble[i];
-    if (abs(cur) > threshold)
-        threshold = abs(cur);
+    if (frameIndex > LEN_PREAMBLE)
+    {
+        SAMPLE cur = 0.0f;
+        for (unsigned i = 0; i < LEN_PREAMBLE; ++i)
+            cur += samples[frameIndex - LEN_PREAMBLE + i] * preamble[i];
+        if (abs(cur) > threshold)
+            threshold = abs(cur);
+    }
 }
 
 bool ReceiveData::correlate_next()
@@ -837,8 +832,9 @@ int DataCo::connect_FTP()
     set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
     memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
     set_packet_CRC(send_ptr);
+    send_ptr += BYTES_INFO + act_len + BYTES_CRC;
     reset();
-    signal = true;
+    signal = 1;
     receive_data.nextSendNo++;
     while (true)
     {
@@ -867,8 +863,9 @@ int DataCo::connect_FTP()
         set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
         memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
         set_packet_CRC(send_ptr);
+        send_ptr += BYTES_INFO + act_len + BYTES_CRC;
         reset();
-        signal = true;
+        signal = 1;
         if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
             if (get_ipport_PASV((char *)read_buf, &server.sin_addr.s_addr, &server.sin_port))
                 if (connect(data_sock,(struct sockaddr *)&server, sizeof server ) < 0)
@@ -883,11 +880,12 @@ int DataCo::connect_FTP()
             reset();
             for( ; ; ) {
                 act_len = read(data_sock, read_buf, read_len);
-                set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_CONTENT_NORMAL, act_len, 0, 0, 0);
+                int typeID = act_len == 0? TYPEID_CONTENT_LAST : TYPEID_CONTENT_NORMAL;
+                set_packet_header(send_ptr, NODE, send_data.dst, typeID, act_len, 0, 0, 0);
                 memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
                 set_packet_CRC(send_ptr);
                 send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-                signal = true;
+                signal = 1;
                 receive_data.nextSendNo++;
                 send_data.nextRecvNo++;
                 if (act_len == 0) break;
@@ -901,7 +899,7 @@ int DataCo::connect_FTP()
             memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
             set_packet_CRC(send_ptr);
             send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-            signal = true;
+            signal = 1;
             receive_data.nextSendNo++;
             receive_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
             send_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
@@ -916,9 +914,8 @@ int DataCo::connect_FTP()
     set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
     memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
     set_packet_CRC(send_ptr);
-    send_ptr += BYTES_INFO + act_len + BYTES_CRC;
     reset();
-    signal = true;
+    signal = 1;
     usleep(100000);
     close(control_sock);
 }
@@ -963,7 +960,7 @@ size_t ReceiveData::write_samples_to_file(const char* path = nullptr)
 
 DataCo::DataCo(Mode mode_, const char *send_file, bool text, void *data_sent_,
     void *data_rec_, SAMPLE *samples_sent_, SAMPLE *samples_rec_, int dst_, in_addr_t ip_, uint16_t port_) :
-    signal(false), mode(mode_),
+    signal(0), mode(mode_),
     send_data(send_file, text, data_sent_, samples_sent_, ACK_INIT_TIMEOUT, true, mode_, &signal, dst_, ip_, port_),
     receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
 {
@@ -971,7 +968,7 @@ DataCo::DataCo(Mode mode_, const char *send_file, bool text, void *data_sent_,
 
 DataCo::DataCo(void *src_, size_t size_, int typeID_, Mode mode_, int dst_ , in_addr_t ip_ , uint16_t port_ ,
         void *data_sent_ , void *data_rec_ , SAMPLE *samples_sent_, SAMPLE *samples_rec_):
-        signal(false), mode(mode_),
+        signal(0), mode(mode_),
         send_data(src_, size_, typeID_, data_sent_, dst_, ip_, port_, samples_sent_,
                 ACK_INIT_TIMEOUT, true, mode_, &signal),
         receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)

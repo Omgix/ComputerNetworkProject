@@ -312,7 +312,7 @@ void Stream::receive(ReceiveData &data, bool text, bool writewaves, const char* 
     }
 }
 
-void Stream::receive(DataCo &data, bool text, bool write_sent_waves, const char* file_wave_sent,
+void Stream::receive(DataCo &data, const char *filename, bool text, bool write_sent_waves, const char* file_wave_sent,
     bool write_rec_waves, const char* file_wave_rec)
 {
     open_output_stream(&data.send_data, SendData::sendCallback);
@@ -351,7 +351,7 @@ void Stream::receive(DataCo &data, bool text, bool write_sent_waves, const char*
     close_output_stream();
     printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
     printf("Threshold: %f\n", data.receive_data.threshold);
-    size_t n = data.receive_data.write_to_file(nullptr, text);
+    size_t n = data.receive_data.write_to_file(filename, text);
     printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
     if (write_rec_waves)
     {

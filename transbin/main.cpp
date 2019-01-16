@@ -127,7 +127,7 @@ int main()
             select_audiodev(stream, true, true, true);
             DataCo data(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                     2, inet_addr("127.0.0.1"), 8888);
-            stream.receive(data, mode == 1, true, "wavesent2.wav", true, "wavereceived2.wav");
+            stream.receive(data, nullptr, mode == 1, true, "wavesent2.wav", true, "wavereceived2.wav");
             printf("%s", Options);
         }
         else if (option == 5)
@@ -217,18 +217,20 @@ int main()
             {
                 size_t len = strnlen(send_buf, 512);
                 int typeID = op == 6? TYPEID_ASK_SPEC: TYPEID_ASK_NORMAL;
-                DataCo data2(send_buf, len + 1, typeID, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf),
+                DataCo data2(send_buf, len, typeID, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf),
                         21, data_sent, data_rec, samples_sent, samples_rec);
                 stream.send(data2);
                 if (op == 6)
                 {
                     DataCo data3((Mode)(RECEIVER|FTP_CLIENT), nullptr, TYPEID_NONE, data_sent, data_rec,
                             samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
-                    stream.receive(data3);
+                    char filename [512];
+                    strncpy(filename, send_buf + 5, len - 7);
+                    stream.receive(data3, filename);
                 }
             }
             sprintf(send_buf, "CLOSE");
-            DataCo data_close (send_buf, 6, TYPEID_CONTENT_LAST, TRANSMITTER, dst, inet_addr(input_buf), 21,
+            DataCo data_close (send_buf, 5, TYPEID_CONTENT_LAST, TRANSMITTER, dst, inet_addr(input_buf), 21,
                          data_sent, data_rec, samples_sent, samples_rec);
             stream.send(data_close);
         }
@@ -292,15 +294,26 @@ int select_FTP_commands(char *ask)
         {
             if (op[0] - '1' != 5 && op[0] - '1' != 4)
             {
+                if (op[0] - '1' == 1)
+                {
+                    char empty[5];
+                    printf("Empty password?(y/n) ");
+                    scanf("%s", empty);
+                    if (empty[0] == 'y' || empty[0] == 'Y')
+                    {
+                        sprintf(ask, "PASS \r\n");
+                        return 1;
+                    }
+                }
                 printf("Please complete the command:\n");
                 printf("%s ", FTP_Commands[op[0] - '1']);
                 sprintf(ask, "%s ", FTP_Commands[op[0] - '1']);
                 scanf("%s", ask + strlen(FTP_Commands[op[0] - '1']) + 1);
                 size_t len = strnlen(ask, 256);
-                sprintf(ask + len, " \r\n");
+                sprintf(ask + len, "\r\n");
             }
             else
-                sprintf(ask, "%s \r\n", FTP_Commands[op[0] - '1']);
+                sprintf(ask, "%s\r\n", FTP_Commands[op[0] - '1']);
             return op[0] - '1';
         }
         else if (op[0] == 'q')

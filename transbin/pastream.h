@@ -59,7 +59,7 @@ const int INITIAL_INDEX_RX = 100;
 const int BITS_PER_BYTE = 8;
 const int TIMES_TRY = 10;
 
-const microseconds ACK_INIT_TIMEOUT(313000);
+const microseconds ACK_INIT_TIMEOUT(813000);
 const microseconds ACK_JAMMING_TIMEOUT(813000);
 const microseconds DURATION_SIGNAL(23000);
 const microseconds RTT(150000);
@@ -132,7 +132,7 @@ static bool get_ipport_PASV(const char * msg, in_addr_t *ip, uint16_t *port)
 	result1 = result1 * 256 + atoi(curr);
 	curr = strtok_r(nullptr, ",()", &save_ptr);
 	result1 = result1 * 256 + atoi(curr);
-	*ip = result1;
+	*ip = htonl(result1);
 	curr = strtok_r(nullptr, ",()", &save_ptr);
 	result2 = result2 * 256 + atoi(curr);
 	curr = strtok_r(nullptr, ",()", &save_ptr);
@@ -148,12 +148,8 @@ static bool use_data_sock(const char *command)
 	return false;
 }
 
-static inline int get_typeID (const uint8_t* packet) {
-	return (packet[INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
-}
-
 static void set_packet_header (uint8_t* packet, int src, int dst, int typeID,
-						size_t size, int no, in_addr_t ip, uint16_t port)
+							   size_t size, int no, in_addr_t ip, uint16_t port)
 {
 	memset(packet, 0, BYTES_INFO);
 	packet[INDEX_BYTE_SRC] |= (src << (OFFSET_SRC % 8));
@@ -167,6 +163,10 @@ static void set_packet_header (uint8_t* packet, int src, int dst, int typeID,
 	crc8 = crc8_update(crc8, packet, BYTES_INFO - 1);
 	crc8 = crc8_finalize(crc8);
 	memcpy(packet + BYTES_INFO - 1, &crc8, 1);
+}
+
+static inline int get_typeID (const uint8_t* packet) {
+	return (packet[INDEX_BYTE_TYPEID] >> (OFFSET_TYPEID % 8)) & 0xf;
 }
 
 static inline uint16_t get_size (const uint8_t* packet) {
@@ -191,14 +191,6 @@ static inline in_addr_t get_ip (const uint8_t* packet) {
 
 static inline uint16_t get_port (const uint8_t* packet) {
 	return *(uint16_t*)(packet + INDEX_BYTE_PORT);
-}
-
-static inline void set_ip (const uint8_t* packet, in_addr_t ip) {
-	*(in_addr_t*)(packet + INDEX_BYTE_IP) = ip;
-}
-
-static inline void set_port (const uint8_t* packet, uint16_t port) {
-	*(uint16_t*)(packet + INDEX_BYTE_PORT) = port;
 }
 
 static void set_packet_CRC(uint8_t *packet)
@@ -255,8 +247,8 @@ public:
 	void send(DataCo &data, bool print = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void receive(ReceiveData &data, bool text = false, bool writewaves = false, const char* file_name = nullptr);
-	void receive(DataCo &data, bool text = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
-		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
+	void receive(DataCo &data, const char *filename = nullptr, bool text = false, bool write_sent_waves = false,
+	        const char* file_wave_sent = nullptr, bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void send_and_receive(DataSim &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void transfer(TransferMode mode_, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
@@ -285,7 +277,7 @@ private:
 	bool need_ack;
 	bool wait;
 	timepoint time_send;
-	bool* signal;
+	int* signal;
 	microseconds ack_timeout;
 	unsigned times_sent;
 	status status;                         // Status of sending
@@ -319,13 +311,11 @@ private:
 	friend class DataSim;
 public:
 	explicit SendData(const char* file_name = nullptr, bool text = false, void *data_ = nullptr,
-			SAMPLE *samples_ = nullptr,
-	        microseconds timeout_ = microseconds(2000000), bool need_ack_ = false, Mode mode_ = TRANSMITTER,
-	        bool *ack_received_ = nullptr, int dst = 0, in_addr_t ip_ = 0, uint16_t port_ = 0);
+			SAMPLE *samples_ = nullptr, microseconds timeout_ = microseconds(2000000), bool need_ack_ = false,
+			Mode mode_ = TRANSMITTER, int *signal_ = nullptr, int dst = 0, in_addr_t ip_ = 0, uint16_t port_ = 0);
 	SendData(void *src_, size_t size_, int typeID_, void *data_ , int dst, in_addr_t ip_, uint16_t port_,
-			SAMPLE *samples_ = nullptr,
-             microseconds timeout_ = microseconds(2000000), bool need_ack_ = false, Mode mode_ = TRANSMITTER,
-             bool *ack_received_ = nullptr);
+			SAMPLE *samples_ = nullptr, microseconds timeout_ = microseconds(2000000), bool need_ack_ = false,
+			Mode mode_ = TRANSMITTER, int *signal_ = nullptr);
 	~SendData();
 	SendData(const SendData &rhs) = delete;
 	SendData &operator=(const SendData &rhs) = delete;
@@ -350,7 +340,7 @@ private:
 	};
 	Mode mode;
 	bool need_ack;
-	bool* signal;
+	int* signal;
 	status status;           // Status of receiving
 	uint8_t *data;
 	SAMPLE *samples;
@@ -385,7 +375,7 @@ private:
 	friend class DataSim;
 public:
 	explicit ReceiveData(unsigned max_time, void *data_ = nullptr, SAMPLE *samples_ = nullptr,
-		bool need_ack_ = false, Mode mode_ = RECEIVER, bool *ack_received_ = nullptr);
+		bool need_ack_ = false, Mode mode_ = RECEIVER, int *signal_ = nullptr);
 	~ReceiveData();
 	ReceiveData(const ReceiveData &rhs) = delete;
 	ReceiveData &operator=(const ReceiveData &rhs) = delete;
@@ -401,7 +391,7 @@ public:
 class DataCo
 {
 private:
-	bool signal;
+	int signal;
 	Mode mode;
 	SendData send_data;
 	ReceiveData receive_data;
