@@ -226,7 +226,7 @@ int main()
                 DataCo data4(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                             2, inet_addr("127.0.0.1"), 8888);
                 stream.receive(data4);
-                if (op == 6)
+                if (op == 6 && *(data_rec + BYTES_INFO) == '1')
                 {
                     DataCo data5(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                                  2, inet_addr("127.0.0.1"), 8888);
@@ -234,7 +234,7 @@ int main()
                     strncpy(filename, send_buf + 5, len - 7);
                     stream.receive(data5, true, filename);
                 }
-                else if (op == 5)
+                else if (op == 5 && *(data_rec + BYTES_INFO) == '1')
                 {
                     DataCo data5(RECEIVER, nullptr, TYPEID_NONE, data_sent, data_rec,
                                  samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
@@ -304,7 +304,7 @@ int select_FTP_commands(char *ask)
         scanf("%s", op);
         if (op[0] - '1' >= 0 && op[0] - '1' < 7)
         {
-            if (op[0] - '1' != 4 && op[0] - '1' != 3)
+            if (op[0] - '1' != 4 && op[0] - '1' != 2)
             {
                 if (op[0] - '1' == 1 || op[0] - '1' == 5)
                 {

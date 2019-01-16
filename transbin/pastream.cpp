@@ -314,7 +314,7 @@ void Stream::receive(DataCo &data, bool save, const char *filename, bool text, b
     start_output_stream();
     start_input_stream();
 
-    printf("Waiting for receiving to finish.\n");
+    //printf("Waiting for receiving to finish.\n");
     int no = 0;
     uint8_t  *buf = data.receive_data.data;
 
@@ -344,9 +344,7 @@ void Stream::receive(DataCo &data, bool save, const char *filename, bool text, b
     close_output_stream();
     if (save)
         printf("\n#### Receiving is finished!! Now write the data to the file ####\n");
-    else
-        printf("\n#### Receiving is finished!! ####\n");
-    printf("Threshold: %f\n", data.receive_data.threshold);
+    //printf("Threshold: %f\n", data.receive_data.threshold);
     if (save)
     {
         size_t n = data.receive_data.write_to_file(filename, text);
@@ -374,10 +372,12 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
         int control_sock;
         int data_sock;
         struct sockaddr_in server;
+        struct sockaddr_in server_data;
         const int read_len = 512;
         uint8_t read_buf [read_len];
         uint8_t *ptr = data_rec;
         memset(&server, 0, sizeof(struct sockaddr_in));
+        memset(&server_data, 0, sizeof(struct sockaddr_in));
 
         control_sock = socket(AF_INET, SOCK_STREAM, 0);
         if (control_sock == -1)
@@ -397,6 +397,7 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
         server.sin_addr.s_addr = get_ip(ptr);
         server.sin_port = htons(get_port(ptr));
         server.sin_family = AF_INET;
+        server_data.sin_family = AF_INET;
 
         uint16_t port = server.sin_port;
         char ip [INET_ADDRSTRLEN];
@@ -436,13 +437,13 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
                          21, data_sent, data_rec, samples_sent, samples_rec);
             send(data4);
             if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
-                if (get_ipport_PASV((char *)read_buf, &server.sin_addr.s_addr, &server.sin_port))
-                    if (connect(data_sock,(struct sockaddr *)&server, sizeof server ) < 0)
+                if (get_ipport_PASV((char *)read_buf, &server_data.sin_addr.s_addr, &server_data.sin_port))
+                    if (connect(data_sock,(struct sockaddr *)&server_data, sizeof server_data) < 0)
                     {
                         printf("Error: Data Connect Failed \n");
                         return;
                     }
-            if (use_data_sock((char *)(ptr + BYTES_INFO)))
+            if (use_data_sock((char *)(ptr + BYTES_INFO)) && read_buf[0] == '1')
             {
                 int typeID = strncmp((char *)(ptr + BYTES_INFO), "LIST", 4) == 0?
                         TYPEID_ANSWER : TYPEID_CONTENT_NORMAL;
@@ -457,6 +458,7 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
                 send(data5);
             }
         }
+        close(data_sock);
         const char *quit_msg = "QUIT\r\n";
         write(control_sock, quit_msg, strlen(quit_msg));
         read(control_sock, read_buf, read_len);
