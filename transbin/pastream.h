@@ -407,7 +407,6 @@ private:
 	SendData send_data;
 	ReceiveData receive_data;
 	friend class Stream;
-	void reset();
 public:
 	explicit DataCo(Mode mode_, const char *send_file = nullptr, bool text = false, void *data_sent_ = nullptr,
 		void *data_rec_ = nullptr, SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr,
@@ -416,7 +415,6 @@ public:
 			void *data_sent_ , void *data_rec_ , SAMPLE *samples_sent_ = nullptr, SAMPLE *samples_rec_ = nullptr);
 	DataCo(const DataCo &rhs) = delete;
 	DataCo &operator=(const DataCo &rhs) = delete;
-    int connect_FTP();
 };
 
 class DataSim

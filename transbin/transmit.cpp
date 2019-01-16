@@ -102,10 +102,10 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                             if ((data->typeID == TYPEID_CONTENT_LAST ||
                                     data->typeID == TYPEID_ASK_LAST ||
                                     data->typeID == TYPEID_CLOSE_LAST ||
-                                    data->typeID == TYPEID_ANSWER_LAST) && !data->in_mode(FTP_CLIENT))
+                                    data->typeID == TYPEID_ANSWER_LAST))
                                 // All data has been sent
                                 return paComplete; // When reach there, wait is false;
-                            if (data->typeID == TYPEID_ASK_NORMAL && data->in_mode(FTP_CLIENT))
+                            if (data->typeID == TYPEID_ASK_NORMAL)
                                 // All data has been sent
                                 return paComplete; // When reach there, wait is false;
                             if (data->ack_timeout == ACK_INIT_TIMEOUT)
@@ -132,8 +132,8 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 data->isNewPacket = false;
                 data->isPreamble = true;
                 index = 0;
-                //printf("send: %d: type: %d, index: %d, src: %d, bytes: %d\n",
-                       //data->noPacket, data->typeID, index, data->src, data->bytesPacket);
+                printf("send: %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                       data->noPacket, data->typeID, index, data->src, data->bytesPacket);
             }
             if (data->isPreamble)
             {
@@ -277,7 +277,7 @@ SendData::SendData(const char* file_name, bool text, void *data_, SAMPLE *sample
             totalBits = size * BITS_PER_BYTE + (BITS_CRC + BITS_INFO) * numPacket;
         }
     }
-    else if (in_mode(RECEIVER) && !in_mode(FTP_CLIENT))
+    else if (in_mode(RECEIVER))
     {
         size = BYTES_ACK_CONTENT;
         if (!ext_data_ptr)
@@ -306,24 +306,22 @@ typeID(-1)
     if (!ext_sample_ptr)
         samples = new SAMPLE[10000];
     int no = 0;
-    if (in_mode(FTP_CLIENT))
-    {
-        static int totalNo = 0;
-        no = totalNo++;
-    }
     size_t remain = size_;
     int off = 0;
     uint8_t *ptr = data;
+    uint8_t *srcc = (uint8_t*)src_;
     while (remain > 0)
     {
         size_t read_chunk = remain < 512 ? remain: 512;
         remain -= read_chunk;
         int typeID_p = remain == 0? typeID_ + 1 : typeID_;
-        set_packet_header(data, NODE, dst, typeID_p, read_chunk, no, ip, port);
-        memcpy(ptr + BYTES_INFO, (uint8_t*)src_ + off, read_chunk);
-        set_packet_CRC(data);
+        memcpy(ptr + BYTES_INFO, srcc, read_chunk);
+        set_packet_header(ptr, NODE, dst, typeID_p, read_chunk, no, ip, port);
+        set_packet_CRC(ptr);
         ptr += BYTES_INFO + read_chunk + BYTES_CRC;
         off += read_chunk;
+        srcc += read_chunk;
+        no++;
     }
 }
 
@@ -338,7 +336,7 @@ SendData::~SendData()
 void SendData::prepare_for_new_sending()
 {
     isNewPacket = true;
-    if (in_mode(RECEIVER) && !in_mode(GATEWAY) && !in_mode(FTP_CLIENT))
+    if (in_mode(RECEIVER) && !in_mode(GATEWAY))
         bitIndex -= packetFrameIndex / SAMPLES_PER_N_BIT * NUM_CARRIRER;
 }
 
@@ -604,8 +602,8 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     data->typeID = get_typeID(data->packet[choice]);
                     data->bytesPacket = get_size(data->packet[choice]);
                     data->noPacket = get_no(data->packet[choice]);
-                    //printf("packet %d/%d: type: %d, index: %d, src: %d, bytes: %d\n",
-                    //data->noPacket, data->nextRecvNo, data->typeID, frameIndex, data->src, data->bytesPacket);
+                    printf("packet %d/%d: type: %d, index: %d, src: %d, bytes: %d\n",
+                    data->noPacket, data->nextRecvNo, data->typeID, frameIndex, data->src, data->bytesPacket);
                 }
                 if (packetFrameIndex >=
                 SAMPLES_PER_N_BIT * (BYTES_INFO + data->bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
@@ -794,156 +792,6 @@ int ReceiveData::send_udp_msg()
     return 0;
 }
 
-int DataCo::connect_FTP()
-{
-    int control_sock;
-    int data_sock;
-    struct sockaddr_in server;
-    const int read_len = 512;
-    uint8_t read_buf [read_len];
-    uint8_t *send_ptr = send_data.data;
-    memset(&server, 0, sizeof(struct sockaddr_in));
-
-    control_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (control_sock == -1)
-    {
-        perror("Could not create controll socket");
-        return 1;
-    }
-    data_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (data_sock == -1)
-    {
-        perror("Could not create data socket");
-        return 1;
-    }
-    while (receive_data.nextSendNo >= receive_data.nextRecvNo) { printf("\r");fflush(stdout); }
-
-    uint8_t *ptr = receive_data.data;
-
-    server.sin_addr.s_addr = get_ip(ptr);
-    server.sin_port = htons(get_port(ptr));
-    server.sin_family = AF_INET;
-    ptr += get_size(ptr) + BYTES_INFO;
-
-    uint16_t port = server.sin_port;
-    char ip [INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &(server.sin_addr), ip, INET_ADDRSTRLEN);
-
-    printf("Connect to <%s,%d>\n", ip, port);
-
-    if (connect(control_sock,(struct sockaddr *)&server, sizeof server ) < 0)
-    {
-        printf("Error : Connect Failed \n");
-        return -1;
-    }
-    read(control_sock, read_buf, read_len);
-    size_t act_len = command_len((char *)read_buf, read_len);
-    read_buf[read_len - 1] = '\0';
-    printf("Message: %zu\n%s", act_len, read_buf);
-    set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
-    memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
-    set_packet_CRC(send_ptr);
-    send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-    reset();
-    signal = 1;
-    receive_data.nextSendNo++;
-    while (true)
-    {
-        while (receive_data.nextSendNo >= receive_data.nextRecvNo) { printf("Sym\r");fflush(stdout); }
-        int no = get_no(ptr);
-        int msg_len = get_size(ptr);
-        if (get_typeID(ptr) == TYPEID_CONTENT_LAST)
-            break;
-        server.sin_addr.s_addr = get_ip(ptr);
-        server.sin_port = htons(get_port(ptr));
-
-        port = get_port(ptr);
-        inet_ntop(AF_INET, &(server.sin_addr), ip, INET_ADDRSTRLEN);
-
-        printf("Get packet #%d with %d bytes, send it to <%s,%d>\n", no, msg_len, ip, port);
-        printf("From client: ");
-        for (int i = 0; i < msg_len; ++i)
-            printf("%c", *(ptr + BYTES_INFO + i));
-        printf("\n");
-
-        write(control_sock, ptr + BYTES_INFO, msg_len);
-        read(control_sock, read_buf, read_len);
-        read_buf[read_len - 1] = '\0';
-        act_len = command_len((char *)read_buf, read_len);
-        printf("Message: %zu\n%s", act_len, read_buf);
-        set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
-        memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
-        set_packet_CRC(send_ptr);
-        send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-        reset();
-        signal = 1;
-        if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
-            if (get_ipport_PASV((char *)read_buf, &server.sin_addr.s_addr, &server.sin_port))
-                if (connect(data_sock,(struct sockaddr *)&server, sizeof server ) < 0)
-                {
-                    printf("Error: Data Connect Failed \n");
-                    return -1;
-                }
-        if (use_data_sock((char *)(ptr + BYTES_INFO)))
-        {
-            usleep(1000);
-            receive_data.mode = (Mode)(TRANSMITTER | GATEWAY | FTP_CLIENT);
-            send_data.mode = (Mode)(TRANSMITTER | GATEWAY | FTP_CLIENT);
-            int tmp1 = receive_data.nextSendNo;
-            int tmp2 = receive_data.nextRecvNo;
-            int tmp3 = send_data.nextSendNo;
-            int tmp4 = send_data.nextRecvNo;
-            receive_data.nextSendNo = receive_data.nextRecvNo = 0;
-            send_data.nextSendNo = send_data.nextRecvNo = 0;
-            int typeID = strncmp((char *)(ptr + BYTES_INFO), "LIST", 4) == 0? TYPEID_ANSWER : TYPEID_CONTENT_NORMAL;
-            send_data.status = SendData::SIGNAL;
-            receive_data.status = ReceiveData::WAITING;
-            for(int i = 0; ;i++ ) {
-                act_len = read(data_sock, read_buf, read_len);
-                printf("Read %zu--\n", act_len);
-                typeID = act_len == 0? typeID + 1 : typeID;
-                set_packet_header(send_ptr, NODE, send_data.dst, typeID, act_len, i, 0, 0);
-                memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
-                set_packet_CRC(send_ptr);
-                send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-                signal = 1;
-                if (act_len == 0) break;
-            }
-            usleep(1000);
-            close(data_sock);
-            receive_data.nextSendNo = tmp1;
-            receive_data.nextRecvNo = tmp2;
-            send_data.nextSendNo = tmp3;
-            send_data.nextRecvNo = tmp4;
-            receive_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
-            send_data.mode = (Mode)(RECEIVER  | GATEWAY | FTP_CLIENT);
-            read(control_sock, read_buf, read_len);
-            act_len = command_len((char *)read_buf, read_len);
-            set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
-            memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
-            set_packet_CRC(send_ptr);
-            send_ptr += BYTES_INFO + act_len + BYTES_CRC;
-            signal = 1;
-            receive_data.nextSendNo++;
-            receive_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
-            send_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
-        }
-        ptr += msg_len + BYTES_INFO;
-        receive_data.nextSendNo++;
-    }
-    const char *quit_msg = "QUIT\r\n";
-    write(control_sock, quit_msg, strlen(quit_msg));
-    read(control_sock, read_buf, read_len);
-    act_len = command_len((char *)read_buf, read_len);
-    set_packet_header(send_ptr, NODE, send_data.dst, TYPEID_ANSWER_LAST, act_len, 0, 0, 0);
-    memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
-    set_packet_CRC(send_ptr);
-    reset();
-    signal = 1;
-    usleep(100000);
-    close(control_sock);
-}
-
 size_t ReceiveData::write_to_file(const char* path, bool text)
 {
     size_t n = 0;
@@ -953,21 +801,24 @@ size_t ReceiveData::write_to_file(const char* path, bool text)
 
     if (!file)
     {
-        fprintf(stderr, "Invalid file!\n");
+        fprintf(stderr, "Invalid file! %s\n", path);
         exit(-1);
     }
     uint8_t *buf = data;
+    printf("Oops\n");
     while (n < totalBytes)
     {
         int size = get_size(buf);
         int typeID = get_typeID(buf);
         buf += BYTES_INFO;
+        printf("%d %d %zu %d\n", size, typeID, n, totalBytes);
         if (typeID == TYPEID_CONTENT_NORMAL || typeID == TYPEID_CONTENT_LAST)
             n += fwrite(buf, sizeof(uint8_t), size, file);
         if (typeID == TYPEID_CONTENT_LAST) break;
         buf += size;
     }
     fclose(file);
+    printf("Oops2\n");
     return n;
 }
 
@@ -998,14 +849,6 @@ DataCo::DataCo(void *src_, size_t size_, int typeID_, Mode mode_, int dst_ , in_
         receive_data(MAX_TIME_RECORD, data_rec_, samples_rec_, true, mode_, &signal)
                {}
 
-void DataCo::reset()
-{
-    if (send_data.in_mode(RECEIVER) && send_data.in_mode(GATEWAY) && send_data.in_mode(FTP_CLIENT))
-    {
-        send_data.status = SendData::SIGNAL;
-        receive_data.status = ReceiveData::WAITING;
-    }
-}
 
 DataSim::DataSim(const int dst_, const char *send_file, void *data_sent_, void *data_rec_,
                 SAMPLE *samples_sent_, SAMPLE *samples_rec_) : 

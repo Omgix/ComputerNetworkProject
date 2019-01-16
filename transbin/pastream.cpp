@@ -364,6 +364,8 @@ void Stream::receive(DataCo &data, bool save, const char *filename, bool text, b
     }
 }
 
+uint8_t tran[1024*1024];
+
 void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *file_wave_sent,
                       bool write_rec_waves, const char *file_wave_rec)
 {
@@ -375,6 +377,8 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
         struct sockaddr_in server_data;
         const int read_len = 512;
         uint8_t read_buf [read_len];
+        const int send_len = 600;
+        char send_buf [read_len];
         uint8_t *ptr = data_rec;
         memset(&server, 0, sizeof(struct sockaddr_in));
         memset(&server_data, 0, sizeof(struct sockaddr_in));
@@ -425,35 +429,40 @@ void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *fil
             if (get_typeID(ptr) == TYPEID_CONTENT_LAST)
                 break;
             int msg_len = get_size(ptr);
+            memcpy(send_buf, ptr + BYTES_INFO, msg_len);
             printf("From client %d: ", msg_len);
             for (int i = 0; i < msg_len; ++i)
-                printf("%c", *(ptr + BYTES_INFO + i));
+                printf("%c", *(send_buf + i));
             printf("\n");
-            write(control_sock, ptr + BYTES_INFO, msg_len);
+            write(control_sock, send_buf, msg_len);
             act_len = read(control_sock, read_buf, read_len);
             read_buf[act_len] = '\0';
             printf("Message: %zu\n%s", act_len, read_buf);
             DataCo data4(read_buf, act_len, TYPEID_ANSWER, TRANSMITTER, 2,0,
                          21, data_sent, data_rec, samples_sent, samples_rec);
             send(data4);
-            if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
+            if (strncmp(send_buf, "PASV", 4) == 0)
+            {
+                printf("Connect data socket.\n");
                 if (get_ipport_PASV((char *)read_buf, &server_data.sin_addr.s_addr, &server_data.sin_port))
                     if (connect(data_sock,(struct sockaddr *)&server_data, sizeof server_data) < 0)
                     {
                         printf("Error: Data Connect Failed \n");
                         return;
                     }
-            if (use_data_sock((char *)(ptr + BYTES_INFO)) && read_buf[0] == '1')
+            }
+            if (use_data_sock(send_buf) && read_buf[0] == '1')
             {
-                int typeID = strncmp((char *)(ptr + BYTES_INFO), "LIST", 4) == 0?
+                int typeID = strncmp(send_buf, "LIST", 4) == 0?
                         TYPEID_ANSWER : TYPEID_CONTENT_NORMAL;
                 act_len = 0;
                 for(int i = 0; ;i++ ) {
-                    act_len += read(data_sock, data_sent + act_len, read_len);
-                    printf("Read %zu--\n", act_len);
-                    if (act_len == 0) break;
+                    size_t new_len = read(data_sock, tran + act_len, read_len);
+                    act_len += new_len;
+                    printf("Read %zu--\n", new_len);
+                    if (new_len == 0) break;
                 }
-                DataCo data5(data_sent, act_len, typeID, TRANSMITTER, 2,0,
+                DataCo data5(tran, act_len, typeID, TRANSMITTER, 2,0,
                              21, data_sent, data_rec, samples_sent, samples_rec);
                 send(data5);
             }

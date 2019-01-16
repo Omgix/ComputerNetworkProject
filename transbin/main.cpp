@@ -228,15 +228,15 @@ int main()
                 stream.receive(data4);
                 if (op == 6 && *(data_rec + BYTES_INFO) == '1')
                 {
-                    DataCo data5(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                    DataCo data5((Mode)(RECEIVER), nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                                  2, inet_addr("127.0.0.1"), 8888);
                     char filename [512];
                     strncpy(filename, send_buf + 5, len - 7);
-                    stream.receive(data5, true, filename);
+                    stream.receive(data5, true, "test");
                 }
                 else if (op == 5 && *(data_rec + BYTES_INFO) == '1')
                 {
-                    DataCo data5(RECEIVER, nullptr, TYPEID_NONE, data_sent, data_rec,
+                    DataCo data5((Mode)(RECEIVER), nullptr, TYPEID_NONE, data_sent, data_rec,
                                  samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
                     stream.receive(data5);
                 }
