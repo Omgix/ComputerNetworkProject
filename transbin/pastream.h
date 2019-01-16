@@ -10,6 +10,12 @@
 #include "crc-8.h"
 #include "crc.h"
 #include <cstring>
+#include <sys/types.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <zconf.h>
+#include <arpa/inet.h>
+#include <netdb.h>
 
 #define PA_SAMPLE_TYPE  paFloat32
 typedef float SAMPLE;
@@ -85,12 +91,14 @@ const int INDEX_BYTE_PORT = OFFSET_PORT / 8;
 
 const int TYPEID_CONTENT_NORMAL = 0;
 const int TYPEID_CONTENT_LAST = 1;
-const int TYPEID_ACK = 3;
-const int TYPEID_ACK_LAST = 5;
-const int TYPEID_ASK_NORMAL = 7;
-const int TYPEID_ASK_SPEC = 8;
-const int TYPEID_ANSWER = 9;
-const int TYPEID_ANSWER_LAST = 11;
+const int TYPEID_CLOSE = 2;
+const int TYPEID_CLOSE_LAST = 3;
+const int TYPEID_ASK_NORMAL = 4;
+const int TYPEID_ASK_LAST = 5;
+const int TYPEID_ANSWER = 6;
+const int TYPEID_ANSWER_LAST = 7;
+const int TYPEID_ACK = 8;
+const int TYPEID_ACK_LAST = 9;
 const int TYPEID_NONE = 0xf;
 extern int NODE;
 
@@ -104,6 +112,8 @@ static size_t command_len(const char *str, size_t n)
 	for (size_t i = 0; i < n; ++i)
 		if (str[i] == '\r' && str [i + 1] == '\n')
 			return i + 2;
+		else if (str[i] == '\0')
+			return i;
 
 	return 0;
 }
@@ -143,7 +153,7 @@ static bool get_ipport_PASV(const char * msg, in_addr_t *ip, uint16_t *port)
 
 static bool use_data_sock(const char *command)
 {
-	if (strncmp(command, "RETR", 4) == 0)
+	if (strncmp(command, "RETR", 4) == 0 || strncmp(command, "LIST", 4) == 0)
 		return true;
 	return false;
 }
@@ -247,8 +257,9 @@ public:
 	void send(DataCo &data, bool print = false, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void receive(ReceiveData &data, bool text = false, bool writewaves = false, const char* file_name = nullptr);
-	void receive(DataCo &data, const char *filename = nullptr, bool text = false, bool write_sent_waves = false,
-	        const char* file_wave_sent = nullptr, bool write_rec_waves = false, const char* file_wave_rec = nullptr);
+	void receive(DataCo &data, bool save = false, const char *filename = nullptr, bool text = false,
+	        bool write_sent_waves = false, const char* file_wave_sent = nullptr, bool write_rec_waves = false,
+	        const char* file_wave_rec = nullptr);
 	void send_and_receive(DataSim &data, bool write_sent_waves = false, const char* file_wave_sent = nullptr,
 		bool write_rec_waves = false, const char* file_wave_rec = nullptr);
 	void transfer(TransferMode mode_, bool write_sent_waves = false, const char* file_wave_sent = nullptr,

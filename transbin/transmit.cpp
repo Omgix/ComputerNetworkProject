@@ -3,12 +3,6 @@
 #include <cstdlib>
 #include <cmath>
 #include <random>
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <zconf.h>
-#include <arpa/inet.h>
-#include <netdb.h>
 
 bool in = false;
 float square[MAX_TIME_RECORD * SAMPLE_RATE];
@@ -105,7 +99,10 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                             //printf("ACK #%d | %d received.\n", data->nextSendNo, data->typeID);
                             data->times_sent = 0;
                             data->wait = false;
-                            if (data->typeID == TYPEID_CONTENT_LAST && !data->in_mode(FTP_CLIENT))
+                            if ((data->typeID == TYPEID_CONTENT_LAST ||
+                                    data->typeID == TYPEID_ASK_LAST ||
+                                    data->typeID == TYPEID_CLOSE_LAST ||
+                                    data->typeID == TYPEID_ANSWER_LAST) && !data->in_mode(FTP_CLIENT))
                                 // All data has been sent
                                 return paComplete; // When reach there, wait is false;
                             if (data->typeID == TYPEID_ASK_NORMAL && data->in_mode(FTP_CLIENT))
@@ -135,8 +132,8 @@ int SendData::sendCallback(const void *inputBuffer, void *outputBuffer,
                 data->isNewPacket = false;
                 data->isPreamble = true;
                 index = 0;
-                printf("packet send: %d: type: %d, index: %d, src: %d, bytes: %d\n",
-                       data->noPacket, data->typeID, index, data->src, data->bytesPacket);
+                //printf("send: %d: type: %d, index: %d, src: %d, bytes: %d\n",
+                       //data->noPacket, data->typeID, index, data->src, data->bytesPacket);
             }
             if (data->isPreamble)
             {
@@ -314,9 +311,20 @@ typeID(-1)
         static int totalNo = 0;
         no = totalNo++;
     }
-    set_packet_header(data, NODE, dst, typeID_, size_, no, ip, port);
-    memcpy(data + BYTES_INFO, src_, size_);
-    set_packet_CRC(data);
+    size_t remain = size_;
+    int off = 0;
+    uint8_t *ptr = data;
+    while (remain > 0)
+    {
+        size_t read_chunk = remain < 512 ? remain: 512;
+        remain -= read_chunk;
+        int typeID_p = remain == 0? typeID_ + 1 : typeID_;
+        set_packet_header(data, NODE, dst, typeID_p, read_chunk, no, ip, port);
+        memcpy(ptr + BYTES_INFO, (uint8_t*)src_ + off, read_chunk);
+        set_packet_CRC(data);
+        ptr += BYTES_INFO + read_chunk + BYTES_CRC;
+        off += read_chunk;
+    }
 }
 
 SendData::~SendData()
@@ -596,8 +604,8 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     data->typeID = get_typeID(data->packet[choice]);
                     data->bytesPacket = get_size(data->packet[choice]);
                     data->noPacket = get_no(data->packet[choice]);
-                    printf("packet %d/%d: type: %d, index: %d, src: %d, bytes: %d\n",
-                    data->noPacket, data->nextRecvNo, data->typeID, frameIndex, data->src, data->bytesPacket);
+                    //printf("packet %d/%d: type: %d, index: %d, src: %d, bytes: %d\n",
+                    //data->noPacket, data->nextRecvNo, data->typeID, frameIndex, data->src, data->bytesPacket);
                 }
                 if (packetFrameIndex >=
                 SAMPLES_PER_N_BIT * (BYTES_INFO + data->bytesPacket + BYTES_CRC)*8 / NUM_CARRIRER)
@@ -626,7 +634,7 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                         wptr = data->data + indexByte;
                         memcpy(wptr, data->packet[choice], data->bytesPacket + BYTES_INFO);
 
-                        printf("%d bytes received.\n", data->bytesPacket);
+                        //printf("%d bytes received.\n", data->bytesPacket);
                         data->nextRecvNo = data->noPacket + 1;
                         data->totalBytes += data->bytesPacket;
                     }
@@ -645,7 +653,10 @@ int ReceiveData::receiveCallback(const void *inputBuffer, void *outputBuffer,
                     }
 
                     if (data->in_mode(RECEIVER) && !data->in_mode(GATEWAY)
-                        && data->typeID == TYPEID_CONTENT_LAST)
+                        && (data->typeID == TYPEID_CONTENT_LAST ||
+                            data->typeID == TYPEID_ASK_LAST ||
+                            data->typeID == TYPEID_CLOSE_LAST ||
+                            data->typeID == TYPEID_ANSWER_LAST))
                         return paComplete;
                     else
                         data->prepare_for_new_packet();
@@ -875,22 +886,35 @@ int DataCo::connect_FTP()
                 }
         if (use_data_sock((char *)(ptr + BYTES_INFO)))
         {
+            usleep(1000);
             receive_data.mode = (Mode)(TRANSMITTER | GATEWAY | FTP_CLIENT);
             send_data.mode = (Mode)(TRANSMITTER | GATEWAY | FTP_CLIENT);
-            reset();
-            for( ; ; ) {
+            int tmp1 = receive_data.nextSendNo;
+            int tmp2 = receive_data.nextRecvNo;
+            int tmp3 = send_data.nextSendNo;
+            int tmp4 = send_data.nextRecvNo;
+            receive_data.nextSendNo = receive_data.nextRecvNo = 0;
+            send_data.nextSendNo = send_data.nextRecvNo = 0;
+            int typeID = strncmp((char *)(ptr + BYTES_INFO), "LIST", 4) == 0? TYPEID_ANSWER : TYPEID_CONTENT_NORMAL;
+            send_data.status = SendData::SIGNAL;
+            receive_data.status = ReceiveData::WAITING;
+            for(int i = 0; ;i++ ) {
                 act_len = read(data_sock, read_buf, read_len);
-                int typeID = act_len == 0? TYPEID_CONTENT_LAST : TYPEID_CONTENT_NORMAL;
-                set_packet_header(send_ptr, NODE, send_data.dst, typeID, act_len, 0, 0, 0);
+                printf("Read %zu--\n", act_len);
+                typeID = act_len == 0? typeID + 1 : typeID;
+                set_packet_header(send_ptr, NODE, send_data.dst, typeID, act_len, i, 0, 0);
                 memcpy(send_ptr + BYTES_INFO, read_buf, act_len);
                 set_packet_CRC(send_ptr);
                 send_ptr += BYTES_INFO + act_len + BYTES_CRC;
                 signal = 1;
-                receive_data.nextSendNo++;
-                send_data.nextRecvNo++;
                 if (act_len == 0) break;
             }
+            usleep(1000);
             close(data_sock);
+            receive_data.nextSendNo = tmp1;
+            receive_data.nextRecvNo = tmp2;
+            send_data.nextSendNo = tmp3;
+            send_data.nextRecvNo = tmp4;
             receive_data.mode = (Mode)(RECEIVER | GATEWAY | FTP_CLIENT);
             send_data.mode = (Mode)(RECEIVER  | GATEWAY | FTP_CLIENT);
             read(control_sock, read_buf, read_len);

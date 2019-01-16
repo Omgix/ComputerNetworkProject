@@ -127,7 +127,7 @@ int main()
             select_audiodev(stream, true, true, true);
             DataCo data(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
                     2, inet_addr("127.0.0.1"), 8888);
-            stream.receive(data, nullptr, mode == 1, true, "wavesent2.wav", true, "wavereceived2.wav");
+            stream.receive(data, true, nullptr, mode == 1, true, "wavesent2.wav", true, "wavereceived2.wav");
             printf("%s", Options);
         }
         else if (option == 5)
@@ -208,29 +208,41 @@ int main()
 
             char send_buf[512] = {};
 
-            DataCo data (send_buf, 1, TYPEID_ASK_NORMAL, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf), 21,
+            DataCo data (send_buf, 1, TYPEID_ASK_NORMAL, TRANSMITTER, dst, inet_addr(input_buf), 21,
                     data_sent, data_rec, samples_sent, samples_rec);
             stream.send(data);
+            DataCo data2(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                         2, inet_addr("127.0.0.1"), 8888);
+            stream.receive(data2);
 
             int op;
             while ((op = select_FTP_commands(send_buf)) != -1)
             {
                 size_t len = strnlen(send_buf, 512);
-                int typeID = op == 6? TYPEID_ASK_SPEC: TYPEID_ASK_NORMAL;
-                DataCo data2(send_buf, len, typeID, (Mode)(TRANSMITTER|FTP_CLIENT), dst, inet_addr(input_buf),
+                int typeID = TYPEID_ASK_NORMAL;
+                DataCo data3(send_buf, len, typeID, TRANSMITTER, dst, inet_addr(input_buf),
                         21, data_sent, data_rec, samples_sent, samples_rec);
-                stream.send(data2);
+                stream.send(data3);
+                DataCo data4(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                            2, inet_addr("127.0.0.1"), 8888);
+                stream.receive(data4);
                 if (op == 6)
                 {
-                    DataCo data3((Mode)(RECEIVER|FTP_CLIENT), nullptr, TYPEID_NONE, data_sent, data_rec,
-                            samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
+                    DataCo data5(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                                 2, inet_addr("127.0.0.1"), 8888);
                     char filename [512];
                     strncpy(filename, send_buf + 5, len - 7);
-                    stream.receive(data3, filename);
+                    stream.receive(data5, true, filename);
+                }
+                else if (op == 5)
+                {
+                    DataCo data5(RECEIVER, nullptr, TYPEID_NONE, data_sent, data_rec,
+                                 samples_sent, samples_rec, dst, inet_addr(input_buf), 21);
+                    stream.receive(data5);
                 }
             }
             sprintf(send_buf, "CLOSE");
-            DataCo data_close (send_buf, 5, TYPEID_CONTENT_LAST, TRANSMITTER, dst, inet_addr(input_buf), 21,
+            DataCo data_close (send_buf, 5, TYPEID_CLOSE, TRANSMITTER, dst, inet_addr(input_buf), 21,
                          data_sent, data_rec, samples_sent, samples_rec);
             stream.send(data_close);
         }
@@ -292,17 +304,20 @@ int select_FTP_commands(char *ask)
         scanf("%s", op);
         if (op[0] - '1' >= 0 && op[0] - '1' < 7)
         {
-            if (op[0] - '1' != 5 && op[0] - '1' != 4)
+            if (op[0] - '1' != 4 && op[0] - '1' != 3)
             {
-                if (op[0] - '1' == 1)
+                if (op[0] - '1' == 1 || op[0] - '1' == 5)
                 {
                     char empty[5];
-                    printf("Empty password?(y/n) ");
+                    printf("Empty?(y/n) ");
                     scanf("%s", empty);
                     if (empty[0] == 'y' || empty[0] == 'Y')
                     {
-                        sprintf(ask, "PASS \r\n");
-                        return 1;
+                        if (op[0] - '1' == 1)
+                            sprintf(ask, "PASS \r\n");
+                        else
+                            sprintf(ask, "LIST\r\n");
+                        return op[0] - '1';
                     }
                 }
                 printf("Please complete the command:\n");

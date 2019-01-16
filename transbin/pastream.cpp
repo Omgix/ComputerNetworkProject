@@ -242,7 +242,6 @@ void Stream::send(DataCo &data, bool print, bool write_sent_waves, const char* f
     start_output_stream();
     uint8_t *buf = data.receive_data.data;
     int no = 0;
-    printf("\n-----Reply From the FTP Server------\n");
     while ((err = Pa_IsStreamActive(output_stream)) == 1 && (err = Pa_IsStreamActive(input_stream)) == 1)
     {
         if (no < data.receive_data.nextRecvNo)
@@ -252,11 +251,6 @@ void Stream::send(DataCo &data, bool print, bool write_sent_waves, const char* f
             {
                 for (int k = 0; k < bytes; ++k)
                     printf("%c", *(buf + BYTES_INFO + k));
-            }
-            if (get_typeID(buf) == TYPEID_ANSWER_LAST)
-            {
-                printf("---------------------------------\n\n");
-                break;
             }
             no++;
             buf += BYTES_INFO + bytes;
@@ -312,8 +306,8 @@ void Stream::receive(ReceiveData &data, bool text, bool writewaves, const char* 
     }
 }
 
-void Stream::receive(DataCo &data, const char *filename, bool text, bool write_sent_waves, const char* file_wave_sent,
-    bool write_rec_waves, const char* file_wave_rec)
+void Stream::receive(DataCo &data, bool save, const char *filename, bool text, bool write_sent_waves,
+        const char* file_wave_sent, bool write_rec_waves, const char* file_wave_rec)
 {
     open_output_stream(&data.send_data, SendData::sendCallback);
     open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
@@ -324,6 +318,7 @@ void Stream::receive(DataCo &data, const char *filename, bool text, bool write_s
     int no = 0;
     uint8_t  *buf = data.receive_data.data;
 
+    printf("\n--------------- Reply From the FTP Server ------------\n");
     while ((err = Pa_IsStreamActive(input_stream)) == 1)
     {
         //printf("%d bytes received\r", data.receive_data.totalBytes); fflush(stdout);
@@ -331,28 +326,32 @@ void Stream::receive(DataCo &data, const char *filename, bool text, bool write_s
         if (no < data.receive_data.nextRecvNo)
         {
             int bytes = get_size(buf);
-            int ip = get_ip(buf);
-            uint16_t port = get_port(buf);
-            char ip_addr [INET_ADDRSTRLEN];
-            inet_ntop(AF_INET, &ip, ip_addr, INET_ADDRSTRLEN);
-            printf("From <%s, %d>, message: \n", ip_addr, port);
-            for (int k = 0; k < bytes; ++k)
-                printf("%c", *(buf + BYTES_INFO + k));
-            printf("<End of a message>\n");
+            if (get_typeID(buf) == TYPEID_ANSWER || get_typeID(buf) == TYPEID_ANSWER_LAST)
+            {
+                for (int k = 0; k < bytes; ++k)
+                    printf("%c", *(buf + BYTES_INFO + k));
+            }
             no++;
             buf += BYTES_INFO + bytes;
         }
     }
+    printf("--------------------------------------------------------\n\n");
     if (err < 0) error();
     Pa_Sleep(500);
     stop_input_stream();
     close_input_stream();
     stop_output_stream();
     close_output_stream();
-    printf("\n#### Receiving is finished!! Now write the data to the file OUTPUT.bin. ####\n");
+    if (save)
+        printf("\n#### Receiving is finished!! Now write the data to the file ####\n");
+    else
+        printf("\n#### Receiving is finished!! ####\n");
     printf("Threshold: %f\n", data.receive_data.threshold);
-    size_t n = data.receive_data.write_to_file(filename, text);
-    printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
+    if (save)
+    {
+        size_t n = data.receive_data.write_to_file(filename, text);
+        printf("Writing file received is finished, %zu bytes have been write to in total.\n", n);
+    }
     if (write_rec_waves)
     {
         printf("**You choose get waves received, now writing\n");
@@ -370,52 +369,146 @@ void Stream::receive(DataCo &data, const char *filename, bool text, bool write_s
 void Stream::transfer(TransferMode mode_, bool write_sent_waves, const char *file_wave_sent,
                       bool write_rec_waves, const char *file_wave_rec)
 {
-    Mode direct;
-    if (is_I2A(mode_))
-        direct = TRANSMITTER;
-    else
-        direct = RECEIVER;
-
     if (is_FTP(mode_))
-        direct = (Mode)(RECEIVER | FTP_CLIENT);
-    DataCo data ((Mode)(direct | GATEWAY), nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
-
-    open_output_stream(&data.send_data, SendData::sendCallback);
-    open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
-    start_output_stream();
-    start_input_stream();
-
-    printf("Waiting for transferring to finish.\n");
-    if (is_I2A(mode_))
     {
-        data.send_data.receive_udp_msg();
+        int control_sock;
+        int data_sock;
+        struct sockaddr_in server;
+        const int read_len = 512;
+        uint8_t read_buf [read_len];
+        uint8_t *ptr = data_rec;
+        memset(&server, 0, sizeof(struct sockaddr_in));
+
+        control_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (control_sock == -1)
+        {
+            perror("Could not create controll socket");
+            return;
+        }
+        data_sock = socket(AF_INET, SOCK_STREAM, 0);
+        if (data_sock == -1)
+        {
+            perror("Could not create data socket");
+            return;
+        }
+        DataCo data(RECEIVER, nullptr, false, data_sent, ptr, samples_sent, samples_rec,
+                    2, inet_addr("127.0.0.1"), 8888);
+        receive(data);
+        server.sin_addr.s_addr = get_ip(ptr);
+        server.sin_port = htons(get_port(ptr));
+        server.sin_family = AF_INET;
+
+        uint16_t port = server.sin_port;
+        char ip [INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(server.sin_addr), ip, INET_ADDRSTRLEN);
+
+        printf("Connect to <%s,%d>\n", ip, port);
+
+        if (connect(control_sock,(struct sockaddr *)&server, sizeof server ) < 0)
+        {
+            printf("Error : Connect Failed \n");
+            return;
+        }
+        read(control_sock, read_buf, read_len);
+        size_t act_len = command_len((char *)read_buf, read_len);
+        read_buf[read_len - 1] = '\0';
+        printf("Message: %zu\n%s", act_len, read_buf);
+        DataCo data2(read_buf, act_len, TYPEID_ANSWER, TRANSMITTER, 2,0,
+                              21, data_sent, data_rec, samples_sent, samples_rec);
+        send(data2);
+        while (true)
+        {
+            DataCo data3(RECEIVER, nullptr, false, data_sent, data_rec, samples_sent, samples_rec,
+                        2, inet_addr("127.0.0.1"), 8888);
+            receive(data3);
+            if (get_typeID(ptr) == TYPEID_CONTENT_LAST)
+                break;
+            int msg_len = get_size(ptr);
+            printf("From client %d: ", msg_len);
+            for (int i = 0; i < msg_len; ++i)
+                printf("%c", *(ptr + BYTES_INFO + i));
+            printf("\n");
+            write(control_sock, ptr + BYTES_INFO, msg_len);
+            act_len = read(control_sock, read_buf, read_len);
+            read_buf[act_len] = '\0';
+            printf("Message: %zu\n%s", act_len, read_buf);
+            DataCo data4(read_buf, act_len, TYPEID_ANSWER, TRANSMITTER, 2,0,
+                         21, data_sent, data_rec, samples_sent, samples_rec);
+            send(data4);
+            if (strncmp((char *)(ptr + BYTES_INFO), "PASV", 4) == 0)
+                if (get_ipport_PASV((char *)read_buf, &server.sin_addr.s_addr, &server.sin_port))
+                    if (connect(data_sock,(struct sockaddr *)&server, sizeof server ) < 0)
+                    {
+                        printf("Error: Data Connect Failed \n");
+                        return;
+                    }
+            if (use_data_sock((char *)(ptr + BYTES_INFO)))
+            {
+                int typeID = strncmp((char *)(ptr + BYTES_INFO), "LIST", 4) == 0?
+                        TYPEID_ANSWER : TYPEID_CONTENT_NORMAL;
+                act_len = 0;
+                for(int i = 0; ;i++ ) {
+                    act_len += read(data_sock, data_sent + act_len, read_len);
+                    printf("Read %zu--\n", act_len);
+                    if (act_len == 0) break;
+                }
+                DataCo data5(data_sent, act_len, typeID, TRANSMITTER, 2,0,
+                             21, data_sent, data_rec, samples_sent, samples_rec);
+                send(data5);
+            }
+        }
+        const char *quit_msg = "QUIT\r\n";
+        write(control_sock, quit_msg, strlen(quit_msg));
+        read(control_sock, read_buf, read_len);
+        act_len = command_len((char *)read_buf, read_len);
+        DataCo data4(read_buf, act_len, TYPEID_ANSWER, TRANSMITTER, 2,0,
+                     21, data_sent, data_rec, samples_sent, samples_rec);
+        send(data4);
+        close(control_sock);
     }
     else
     {
-        if (is_FTP(mode_))
-            data.connect_FTP();
+        Mode direct;
+        if (is_I2A(mode_))
+            direct = TRANSMITTER;
         else
-            data.receive_data.send_udp_msg();
-    }
+            direct = RECEIVER;
 
-    if (err < 0) error();
-    Pa_Sleep(500);
-    stop_input_stream();
-    close_input_stream();
-    stop_output_stream();
-    close_output_stream();
-    printf("\n#### Transferring is finished!! ####\n");
-    if (write_rec_waves)
-    {
-        printf("**You choose get waves received, now writing\n");
-        size_t n = data.receive_data.write_samples_to_file(file_wave_rec);
-        printf("**Writing samples recorded is finished, %zu samples have been write to in total.\n", n);
-    }
-    if (write_sent_waves)
-    {
-        printf("**You choose get waves sent, now writing\n");
-        size_t n = data.send_data.write_samples_to_file(file_wave_sent);
-        printf("**Writing waves sent is finished, %zu samples have been write to in total.\n", n);
+        DataCo data ((Mode)(direct | GATEWAY), nullptr, false, data_sent, data_rec, samples_sent, samples_rec);
+
+        open_output_stream(&data.send_data, SendData::sendCallback);
+        open_input_stream(&data.receive_data, ReceiveData::receiveCallback);
+        start_output_stream();
+        start_input_stream();
+
+        printf("Waiting for transferring to finish.\n");
+        if (is_I2A(mode_))
+        {
+            data.send_data.receive_udp_msg();
+        }
+        else
+        {
+            data.receive_data.send_udp_msg();
+        }
+        if (err < 0) error();
+        Pa_Sleep(500);
+        stop_input_stream();
+        close_input_stream();
+        stop_output_stream();
+        close_output_stream();
+        printf("\n#### Transferring is finished!! ####\n");
+        if (write_rec_waves)
+        {
+            printf("**You choose get waves received, now writing\n");
+            size_t n = data.receive_data.write_samples_to_file(file_wave_rec);
+            printf("**Writing samples recorded is finished, %zu samples have been write to in total.\n", n);
+        }
+        if (write_sent_waves)
+        {
+            printf("**You choose get waves sent, now writing\n");
+            size_t n = data.send_data.write_samples_to_file(file_wave_sent);
+            printf("**Writing waves sent is finished, %zu samples have been write to in total.\n", n);
+        }
     }
 }
 
